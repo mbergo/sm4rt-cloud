@@ -7,7 +7,7 @@ REGISTRY ?= $(ACR).azurecr.io
 IMAGE ?= $(REGISTRY)/floci-cloud
 TAG ?= v1
 NAMESPACE ?= floci-cloud
-DASHBOARD_HOST ?= floci-cloud.172.170.57.92.nip.io
+DASHBOARD_HOST ?= cloud.sm4rt.works
 
 .DEFAULT_GOAL := help
 
@@ -56,7 +56,7 @@ rollout: ## Restart the deployment (after pushing a new image)
 	kubectl -n $(NAMESPACE) rollout status deploy/floci-cloud --timeout=180s
 
 url: ## Print the dashboard URL
-	@echo "http://$(DASHBOARD_HOST)"
+	@echo "https://$(DASHBOARD_HOST)"
 
 token: ## Print the dashboard access token
 	@kubectl -n $(NAMESPACE) get secret floci-cloud-auth -o jsonpath='{.data.token}' | base64 -d; echo

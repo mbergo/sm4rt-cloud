@@ -67,8 +67,8 @@ All `/api` routes require `Authorization: Bearer <token>`.
 Instances accept standard AWS tooling:
 
 ```bash
-aws --endpoint-url http://<name>.floci.<domain> s3 mb s3://demo
-aws --endpoint-url http://<name>.floci.<domain> dynamodb list-tables
+aws --endpoint-url https://<name>.floci.sm4rt.works s3 mb s3://demo
+aws --endpoint-url https://<name>.floci.sm4rt.works dynamodb list-tables
 ```
 
 ## Configuration
@@ -76,9 +76,11 @@ aws --endpoint-url http://<name>.floci.<domain> dynamodb list-tables
 | Env var | Default | Purpose |
 |---|---|---|
 | `FLOCI_CLOUD_TOKEN` | _(unset = open)_ | Bearer token for the API/dashboard |
-| `INSTANCE_DOMAIN` | `floci.172.170.57.92.nip.io` | Wildcard domain for instance endpoints |
+| `INSTANCE_DOMAIN` | `floci.sm4rt.works` | Wildcard domain for instance endpoints |
 | `FLOCI_IMAGE` | `floci/floci:latest` | Emulator image |
 | `INGRESS_CLASS` | `nginx` | Ingress class for instances |
+| `INSTANCE_TLS` | `false` | Issue Let's Encrypt certs per instance (`true` in AKS deploy) |
+| `CLUSTER_ISSUER` | `letsencrypt` | cert-manager ClusterIssuer used when TLS is on |
 | `MAX_INSTANCES` | `20` | Instance cap |
 | `PORT` | `8080` | API port |
 

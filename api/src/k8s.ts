@@ -34,6 +34,8 @@ export interface ProvisionerOptions {
   instanceDomain: string;
   flociImage: string;
   ingressClass: string;
+  tls: boolean;
+  clusterIssuer: string;
 }
 
 function statusCodeOf(err: unknown): number | undefined {
@@ -75,6 +77,10 @@ export class Provisioner {
 
   hostFor(name: string): string {
     return `${name}.${this.opts.instanceDomain}`;
+  }
+
+  scheme(): string {
+    return this.opts.tls ? 'https' : 'http';
   }
 
   namespaceFor(name: string): string {
@@ -143,7 +149,7 @@ export class Provisioner {
                 image: this.opts.flociImage,
                 ports: [{ containerPort: 4566 }],
                 env: [
-                  { name: 'FLOCI_BASE_URL', value: `http://${host}` },
+                  { name: 'FLOCI_BASE_URL', value: `${this.scheme()}://${host}` },
                   { name: 'DOCKER_HOST', value: 'tcp://localhost:2375' },
                 ],
                 readinessProbe: {
@@ -189,19 +195,24 @@ export class Provisioner {
     };
     await this.core.createNamespacedService({ namespace, body: service });
 
+    const ingressAnnotations: Record<string, string> = {
+      'nginx.ingress.kubernetes.io/proxy-body-size': '0',
+      'nginx.ingress.kubernetes.io/proxy-read-timeout': '300',
+      'nginx.ingress.kubernetes.io/proxy-send-timeout': '300',
+    };
+    if (this.opts.tls) {
+      ingressAnnotations['cert-manager.io/cluster-issuer'] = this.opts.clusterIssuer;
+    }
     const ingress: V1Ingress = {
       metadata: {
         name: 'floci',
         namespace,
         labels,
-        annotations: {
-          'nginx.ingress.kubernetes.io/proxy-body-size': '0',
-          'nginx.ingress.kubernetes.io/proxy-read-timeout': '300',
-          'nginx.ingress.kubernetes.io/proxy-send-timeout': '300',
-        },
+        annotations: ingressAnnotations,
       },
       spec: {
         ingressClassName: this.opts.ingressClass,
+        ...(this.opts.tls ? { tls: [{ hosts: [host], secretName: 'floci-tls' }] } : {}),
         rules: [
           {
             host,
@@ -299,7 +310,7 @@ export class Provisioner {
       status: 'provisioning',
       statusDetail: null,
       host,
-      endpoint: `http://${host}`,
+      endpoint: `${this.scheme()}://${host}`,
       createdAt:
         ns.metadata?.annotations?.[CREATED_AT_ANNOTATION] ??
         ns.metadata?.creationTimestamp?.toISOString() ??

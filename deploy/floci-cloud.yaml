@@ -69,7 +69,11 @@ spec:
             - containerPort: 8080
           env:
             - name: INSTANCE_DOMAIN
-              value: "floci.172.170.57.92.nip.io"
+              value: "floci.sm4rt.works"
+            - name: INSTANCE_TLS
+              value: "true"
+            - name: CLUSTER_ISSUER
+              value: "letsencrypt"
             - name: FLOCI_IMAGE
               value: "floci/floci:latest"
             - name: INGRESS_CLASS
@@ -118,10 +122,16 @@ kind: Ingress
 metadata:
   name: floci-cloud
   namespace: floci-cloud
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - cloud.sm4rt.works
+      secretName: floci-cloud-tls
   rules:
-    - host: floci-cloud.172.170.57.92.nip.io
+    - host: cloud.sm4rt.works
       http:
         paths:
           - path: /

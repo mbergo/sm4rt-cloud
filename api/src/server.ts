@@ -12,6 +12,8 @@ const TOKEN = process.env.FLOCI_CLOUD_TOKEN ?? '';
 const INSTANCE_DOMAIN = process.env.INSTANCE_DOMAIN ?? 'floci.172.170.57.92.nip.io';
 const FLOCI_IMAGE = process.env.FLOCI_IMAGE ?? 'floci/floci:latest';
 const INGRESS_CLASS = process.env.INGRESS_CLASS ?? 'nginx';
+const INSTANCE_TLS = (process.env.INSTANCE_TLS ?? 'false') === 'true';
+const CLUSTER_ISSUER = process.env.CLUSTER_ISSUER ?? 'letsencrypt';
 const PUBLIC_DIR = process.env.PUBLIC_DIR ?? path.resolve(import.meta.dirname, '../public');
 const MAX_TTL_HOURS = 7 * 24;
 const MAX_INSTANCES = Number(process.env.MAX_INSTANCES ?? 20);
@@ -21,6 +23,8 @@ const provisioner = new Provisioner({
   instanceDomain: INSTANCE_DOMAIN,
   flociImage: FLOCI_IMAGE,
   ingressClass: INGRESS_CLASS,
+  tls: INSTANCE_TLS,
+  clusterIssuer: CLUSTER_ISSUER,
 });
 
 if (!TOKEN) {
@@ -136,7 +140,7 @@ function instanceAwsEndpoint(name: string): string {
   if (process.env.KUBERNETES_SERVICE_HOST) {
     return `http://floci.floci-i-${name}.svc.cluster.local:4566`;
   }
-  return `http://${name}.${INSTANCE_DOMAIN}`;
+  return `${provisioner.scheme()}://${name}.${INSTANCE_DOMAIN}`;
 }
 
 async function requireRunningInstance(name: string): Promise<InstanceInfo | null> {
@@ -223,7 +227,7 @@ async function probeHealth(instance: InstanceInfo): Promise<unknown> {
     return null;
   }
   try {
-    const response = await fetch(`${instance.endpoint}/_floci/health`, {
+    const response = await fetch(`${instanceAwsEndpoint(instance.name)}/_floci/health`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) {
