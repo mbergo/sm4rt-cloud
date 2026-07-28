@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-stone-950 text-stone-100 antialiased;
+  background-image:
+    radial-gradient(ellipse 60% 40% at 15% -10%, rgba(245, 158, 11, 0.09), transparent),
+    radial-gradient(ellipse 50% 35% at 85% 0%, rgba(234, 88, 12, 0.06), transparent);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    transform: translateY(0.5rem) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-drawer-in {
+  animation: drawer-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-rise-in {
+  animation: rise-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
