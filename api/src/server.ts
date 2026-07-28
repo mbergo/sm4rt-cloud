@@ -150,6 +150,14 @@ async function requireRunningInstance(name: string): Promise<InstanceInfo | null
   return provisioner.get(name);
 }
 
+const VALID_REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
+
+function requestRegion(request: { query: unknown }): string {
+  const q = request.query as Record<string, string | undefined>;
+  const region = q?.region ?? 'us-east-1';
+  return VALID_REGION.test(region) ? region : 'us-east-1';
+}
+
 app.get('/api/instances/:name/resources/:service', async (request, reply) => {
   const { name, service } = request.params as { name: string; service: string };
   if (!isServiceId(service)) {
@@ -159,7 +167,7 @@ app.get('/api/instances/:name/resources/:service', async (request, reply) => {
   if (!instance) {
     return reply.code(404).send({ error: 'instance not found' });
   }
-  const gateway = new ResourceGateway(instanceAwsEndpoint(name));
+  const gateway = new ResourceGateway(instanceAwsEndpoint(name), requestRegion(request));
   try {
     return { resources: await gateway.list(service) };
   } catch (err) {
@@ -177,17 +185,58 @@ app.post('/api/instances/:name/resources/:service', async (request, reply) => {
   if (!instance) {
     return reply.code(404).send({ error: 'instance not found' });
   }
-  const body = (request.body ?? {}) as { name?: string; value?: string };
+  const body = (request.body ?? {}) as {
+    name?: string;
+    value?: string;
+    runtime?: string;
+    handler?: string;
+    code?: string;
+  };
   const resourceName = (body.name ?? '').trim();
   if (!resourceName) {
     return reply.code(400).send({ error: 'resource name is required' });
   }
-  const gateway = new ResourceGateway(instanceAwsEndpoint(name));
+  const gateway = new ResourceGateway(instanceAwsEndpoint(name), requestRegion(request));
   try {
-    const resource = await gateway.create(service, resourceName, body.value);
+    const resource = await gateway.create(service, {
+      name: resourceName,
+      value: body.value,
+      runtime: body.runtime,
+      handler: body.handler,
+      code: body.code,
+    });
     return reply.code(201).send(resource);
   } catch (err) {
     request.log.warn({ err, service }, 'resource create failed');
+    return reply.code(502).send({ error: describeAwsError(err) });
+  }
+});
+
+app.post('/api/instances/:name/resources/:service/:id/actions/:action', async (request, reply) => {
+  const { name, service, id, action } = request.params as {
+    name: string;
+    service: string;
+    id: string;
+    action: string;
+  };
+  if (!isServiceId(service)) {
+    return reply.code(400).send({ error: 'unknown service' });
+  }
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  const gateway = new ResourceGateway(instanceAwsEndpoint(name), requestRegion(request));
+  try {
+    const result = await gateway.act(
+      service,
+      decodeURIComponent(id),
+      action,
+      (request.body ?? {}) as Record<string, unknown>,
+    );
+    return reply.send({ result });
+  } catch (err) {
+    request.log.warn({ err, service, action }, 'resource action failed');
     return reply.code(502).send({ error: describeAwsError(err) });
   }
 });
@@ -201,7 +250,7 @@ app.delete('/api/instances/:name/resources/:service/:id', async (request, reply)
   if (!instance) {
     return reply.code(404).send({ error: 'instance not found' });
   }
-  const gateway = new ResourceGateway(instanceAwsEndpoint(name));
+  const gateway = new ResourceGateway(instanceAwsEndpoint(name), requestRegion(request));
   try {
     await gateway.remove(service, decodeURIComponent(id));
     return reply.code(204).send();

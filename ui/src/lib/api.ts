@@ -83,7 +83,7 @@ export function getLogs(name: string, tail = 300): Promise<{ logs: string }> {
   return request(`/api/instances/${name}/logs?tail=${tail}`);
 }
 
-export type ServiceId = 's3' | 'sqs' | 'sns' | 'dynamodb' | 'ec2' | 'secrets';
+export type ServiceId = 's3' | 'sqs' | 'sns' | 'dynamodb' | 'ec2' | 'lambda' | 'secrets';
 
 export interface ResourceItem {
   id: string;
@@ -92,30 +92,61 @@ export interface ResourceItem {
   createdAt?: string;
 }
 
+export const REGIONS = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-1',
+  'us-west-2',
+  'eu-west-1',
+  'eu-central-1',
+  'sa-east-1',
+] as const;
+export type Region = (typeof REGIONS)[number];
+
+const regionQs = (region: Region) => `?region=${region}`;
+
 export function listResources(
   instance: string,
   service: ServiceId,
+  region: Region,
 ): Promise<{ resources: ResourceItem[] }> {
-  return request(`/api/instances/${instance}/resources/${service}`);
+  return request(`/api/instances/${instance}/resources/${service}${regionQs(region)}`);
 }
 
 export function createResource(
   instance: string,
   service: ServiceId,
-  payload: { name: string; value?: string },
+  region: Region,
+  payload: { name: string; value?: string; runtime?: string; handler?: string; code?: string },
 ): Promise<ResourceItem> {
-  return request(`/api/instances/${instance}/resources/${service}`, {
+  return request(`/api/instances/${instance}/resources/${service}${regionQs(region)}`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
+export function actOnResource<T = unknown>(
+  instance: string,
+  service: ServiceId,
+  region: Region,
+  id: string,
+  action: string,
+  body: Record<string, unknown> = {},
+): Promise<{ result: T }> {
+  return request(
+    `/api/instances/${instance}/resources/${service}/${encodeURIComponent(id)}/actions/${action}${regionQs(region)}`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
 export function deleteResource(
   instance: string,
   service: ServiceId,
+  region: Region,
   id: string,
 ): Promise<void> {
-  return request(`/api/instances/${instance}/resources/${service}/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
+  return request(
+    `/api/instances/${instance}/resources/${service}/${encodeURIComponent(id)}${regionQs(region)}`,
+    { method: 'DELETE' },
+  );
 }

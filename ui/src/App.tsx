@@ -9,7 +9,7 @@ import {
   type Instance,
 } from './lib/api';
 import CreateModal from './components/CreateModal';
-import DetailDrawer from './components/DetailDrawer';
+import Console from './components/Console';
 import Header from './components/Header';
 import InstanceCard from './components/InstanceCard';
 import Login from './components/Login';
@@ -60,6 +60,38 @@ export default function App() {
 
   if (!authed) {
     return <Login onAuthed={() => setAuthed(true)} />;
+  }
+
+  if (selected) {
+    return (
+      <div className="min-h-screen">
+        <Header
+          instanceCount={instances?.length ?? 0}
+          onCreate={() => setCreateOpen(true)}
+          onSignOut={signOut}
+        />
+        <Console
+          name={selected}
+          onBack={() => {
+            setSelected(null);
+            refresh();
+          }}
+          notify={notify}
+        />
+        {createOpen ? (
+          <CreateModal
+            onClose={() => setCreateOpen(false)}
+            onCreated={(instance) => {
+              setCreateOpen(false);
+              notify(`Instance ${instance.name} is provisioning`);
+              refresh();
+              setSelected(instance.name);
+            }}
+          />
+        ) : null}
+        {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
+      </div>
+    );
   }
 
   return (
@@ -129,7 +161,6 @@ export default function App() {
         />
       ) : null}
 
-      {selected ? <DetailDrawer name={selected} onClose={() => setSelected(null)} /> : null}
 
       {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
     </div>
