@@ -1,14 +1,13 @@
-import { LogOut, Plus } from 'lucide-react';
-import { BrandMark, GhostButton, PrimaryButton } from './bits';
+import { Plus } from 'lucide-react';
+import { UserButton } from '@clerk/react';
+import { BrandMark, PrimaryButton } from './bits';
 
 export default function Header({
   instanceCount,
   onCreate,
-  onSignOut,
 }: {
   instanceCount: number;
   onCreate: () => void;
-  onSignOut: () => void;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/5 bg-stone-950/70 backdrop-blur-xl">
@@ -27,9 +26,11 @@ export default function Header({
           <PrimaryButton onClick={onCreate}>
             <Plus className="h-4 w-4" /> New instance
           </PrimaryButton>
-          <GhostButton onClick={onSignOut} aria-label="Sign out">
-            <LogOut className="h-4 w-4" />
-          </GhostButton>
+          <UserButton
+            appearance={{
+              elements: { userButtonAvatarBox: 'h-8 w-8 ring-1 ring-white/15' },
+            }}
+          />
         </div>
       </div>
     </header>

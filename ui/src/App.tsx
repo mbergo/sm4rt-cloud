@@ -1,11 +1,11 @@
 import { CloudOff } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { Show, useAuth } from '@clerk/react';
 import {
   ApiError,
-  clearToken,
   deleteInstance,
-  getToken,
   listInstances,
+  setTokenProvider,
   type Instance,
 } from './lib/api';
 import CreateModal from './components/CreateModal';
@@ -21,22 +21,37 @@ interface ToastState {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState(() => Boolean(getToken()));
+  return (
+    <>
+      <Show when="signed-out">
+        <Login />
+      </Show>
+      <Show when="signed-in">
+        <Dashboard />
+      </Show>
+    </>
+  );
+}
+
+function Dashboard() {
+  const { getToken, signOut } = useAuth();
+  const [ready, setReady] = useState(false);
   const [instances, setInstances] = useState<Instance[] | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
+  useEffect(() => {
+    setTokenProvider(() => getToken());
+    setReady(true);
+    return () => {
+      setTokenProvider(null);
+    };
+  }, [getToken]);
+
   const notify = useCallback((message: string, tone: ToastState['tone'] = 'ok') => {
     setToast({ message, tone });
     setTimeout(() => setToast(null), 3500);
-  }, []);
-
-  const signOut = useCallback(() => {
-    clearToken();
-    setAuthed(false);
-    setInstances(null);
-    setSelected(null);
   }, []);
 
   const refresh = useCallback(() => {
@@ -44,23 +59,19 @@ export default function App() {
       .then((data) => setInstances(data.instances))
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          signOut();
+          void signOut();
         }
       });
   }, [signOut]);
 
   useEffect(() => {
-    if (!authed) {
+    if (!ready) {
       return;
     }
     refresh();
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
-  }, [authed, refresh]);
-
-  if (!authed) {
-    return <Login onAuthed={() => setAuthed(true)} />;
-  }
+  }, [ready, refresh]);
 
   if (selected) {
     return (
@@ -68,7 +79,6 @@ export default function App() {
         <Header
           instanceCount={instances?.length ?? 0}
           onCreate={() => setCreateOpen(true)}
-          onSignOut={signOut}
         />
         <Console
           name={selected}
@@ -99,7 +109,6 @@ export default function App() {
       <Header
         instanceCount={instances?.length ?? 0}
         onCreate={() => setCreateOpen(true)}
-        onSignOut={signOut}
       />
 
       <main className="mx-auto max-w-6xl px-6 py-8">
@@ -121,7 +130,7 @@ export default function App() {
               No instances yet
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-stone-400">
-              Spin up an isolated AWS emulator in seconds. Each instance gets its own endpoint
+              Spin up an isolated AWS environment in seconds. Each instance gets its own endpoint
               ready for the AWS CLI, SDKs and Terraform.
             </p>
             <PrimaryButton onClick={() => setCreateOpen(true)} className="mt-6">

@@ -81,7 +81,7 @@ export default function CreateModal({
           </button>
         </div>
         <p className="mt-1 text-sm text-stone-400">
-          An isolated Floci emulator with its own AWS endpoint, provisioned on AKS.
+          An isolated AWS environment with its own endpoint, provisioned on AKS.
         </p>
 
         <form onSubmit={submit} className="mt-6 space-y-5">

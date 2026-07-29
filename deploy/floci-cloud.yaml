@@ -27,6 +27,18 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -63,19 +75,23 @@ spec:
         - name: acr-pull
       containers:
         - name: floci-cloud
-          image: aiready.azurecr.io/floci-cloud:v1
+          image: aiready.azurecr.io/floci-cloud:v8
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
           env:
             - name: INSTANCE_DOMAIN
-              value: "floci.sm4rt.works"
+              value: "floci.sm4rtworks.com"
             - name: INSTANCE_TLS
               value: "true"
             - name: CLUSTER_ISSUER
               value: "letsencrypt"
+            - name: GATEWAY_NAME
+              value: "floci"
+            - name: GATEWAY_NAMESPACE
+              value: "envoy-gateway-system"
             - name: FLOCI_IMAGE
-              value: "floci/floci:latest"
+              value: "aiready.azurecr.io/floci:duckfix"
             - name: INGRESS_CLASS
               value: "nginx"
             - name: FLOCI_CLOUD_TOKEN
@@ -83,6 +99,12 @@ spec:
                 secretKeyRef:
                   name: floci-cloud-auth
                   key: token
+            - name: CLERK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: floci-cloud-clerk
+                  key: secret-key
+                  optional: true
           readinessProbe:
             httpGet:
               path: /healthz

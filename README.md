@@ -1,6 +1,6 @@
 # SM4RT-CLOUD
 
-A self-hosted control plane and dashboard for on-demand [Floci](https://floci.io) AWS-emulator
+A self-hosted control plane and dashboard for on-demand [Floci](https://floci.io) AWS
 instances, running on your own AKS cluster.
 
 Each instance is an isolated Floci deployment with its own public endpoint — point the AWS CLI,
@@ -77,7 +77,7 @@ aws --endpoint-url https://<name>.floci.sm4rt.works dynamodb list-tables
 |---|---|---|
 | `FLOCI_CLOUD_TOKEN` | _(unset = open)_ | Bearer token for the API/dashboard |
 | `INSTANCE_DOMAIN` | `floci.sm4rt.works` | Wildcard domain for instance endpoints |
-| `FLOCI_IMAGE` | `floci/floci:latest` | Emulator image |
+| `FLOCI_IMAGE` | `floci/floci:latest` | Floci image |
 | `INGRESS_CLASS` | `nginx` | Ingress class for instances |
 | `INSTANCE_TLS` | `false` | Issue Let's Encrypt certs per instance (`true` in AKS deploy) |
 | `CLUSTER_ISSUER` | `letsencrypt` | cert-manager ClusterIssuer used when TLS is on |

@@ -25,12 +25,16 @@ export class ApiError extends Error {
 
 const TOKEN_KEY = 'floci-cloud-token';
 
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? '';
+type TokenProvider = () => Promise<string | null>;
+
+let tokenProvider: TokenProvider | null = null;
+
+export function setTokenProvider(provider: TokenProvider | null): void {
+  tokenProvider = provider;
 }
 
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? '';
 }
 
 export function clearToken(): void {
@@ -38,11 +42,12 @@ export function clearToken(): void {
 }
 
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  const bearer = token ?? (tokenProvider ? await tokenProvider() : null) ?? getToken();
   const response = await fetch(path, {
     ...init,
     headers: {
       'content-type': 'application/json',
-      authorization: `Bearer ${token ?? getToken()}`,
+      authorization: `Bearer ${bearer}`,
       ...init?.headers,
     },
   });
@@ -54,10 +59,6 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
     throw new ApiError(response.status, body.error ?? response.statusText);
   }
   return response.json();
-}
-
-export function validateToken(token: string): Promise<{ instances: Instance[] }> {
-  return request('/api/instances', undefined, token);
 }
 
 export function listInstances(): Promise<{ instances: Instance[] }> {
@@ -83,7 +84,186 @@ export function getLogs(name: string, tail = 300): Promise<{ logs: string }> {
   return request(`/api/instances/${name}/logs?tail=${tail}`);
 }
 
-export type ServiceId = 's3' | 'sqs' | 'sns' | 'dynamodb' | 'ec2' | 'lambda' | 'secrets';
+export type ServiceId =
+  | 's3'
+  | 'sqs'
+  | 'sns'
+  | 'dynamodb'
+  | 'ec2'
+  | 'lambda'
+  | 'secrets'
+  | 'iam'
+  | 'ssm'
+  | 'logs'
+  | 'kms'
+  | 'events'
+  | 'states'
+  | 'kinesis'
+  | 'apigw'
+  | 'cognito'
+  | 'route53'
+  | 'cloudformation'
+  | 'ecr'
+  | 'ses'
+  | 'scheduler'
+  | 'rds'
+  | 'ecs'
+  | 'athena'
+  | 'glue'
+  | 'elasticache'
+  | 'firehose';
+
+export const REAL_SERVICES = [
+  'kafka',
+  'pulsar',
+  'activemq',
+  'zookeeper',
+  'cassandra',
+  'couchdb',
+  'ozone',
+  'flink',
+  'solr',
+  'nifi',
+  'tomcat',
+  'httpd',
+  'ollama',
+  'jupyter',
+  'mlflow',
+  'iceberg',
+  'trino',
+  'airflow',
+  'lgtm',
+] as const;
+export type RealServiceId = (typeof REAL_SERVICES)[number];
+export type RealServiceStatus = 'stopped' | 'starting' | 'running' | 'error';
+
+export const SERVICE_CATEGORIES = [
+  'messaging',
+  'data',
+  'analytics',
+  'pipelines',
+  'web',
+  'ai',
+  'observability',
+] as const;
+export type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
+
+export interface RealServiceInfo {
+  id: RealServiceId;
+  label: string;
+  description: string;
+  image: string;
+  category: ServiceCategory;
+  status: RealServiceStatus;
+  statusDetail: string | null;
+  endpoints: { label: string; value: string }[];
+}
+
+export function isRealServiceId(value: string): value is RealServiceId {
+  return (REAL_SERVICES as readonly string[]).includes(value);
+}
+
+export function listServices(instance: string): Promise<{ services: RealServiceInfo[] }> {
+  return request(`/api/instances/${instance}/services`);
+}
+
+export interface ServiceMetrics {
+  service: string;
+  cpuMilli: number;
+  memoryBytes: number;
+  pods: number;
+}
+
+export interface InstanceMetrics {
+  instance: string;
+  sampledAt: string;
+  services: ServiceMetrics[];
+}
+
+export interface ExplorerService {
+  id: string;
+  proto: 'JSON' | 'QUERY' | 'REST_JSON' | 'REST_XML' | 'CBOR';
+  target: string | null;
+  scope: string;
+  sampleOp: string;
+  sampleBody: string;
+}
+
+export interface ExploreResult {
+  status: number;
+  contentType: string;
+  body: string;
+}
+
+export function listExplorerServices(instance: string): Promise<{ services: ExplorerService[] }> {
+  return request(`/api/instances/${instance}/explorer/services`);
+}
+
+export function exploreCall(
+  instance: string,
+  payload: { service: string; operation: string; body?: string; region?: string },
+): Promise<ExploreResult> {
+  const region = payload.region ? `?region=${payload.region}` : '';
+  return request(`/api/instances/${instance}/explorer${region}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getInstanceMetrics(instance: string): Promise<InstanceMetrics> {
+  return request(`/api/instances/${instance}/metrics`);
+}
+
+export function startService(instance: string, service: RealServiceId): Promise<RealServiceInfo> {
+  return request(`/api/instances/${instance}/services/${service}/start`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
+export function stopService(instance: string, service: RealServiceId): Promise<RealServiceInfo> {
+  return request(`/api/instances/${instance}/services/${service}/stop`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
+export function getServiceLogs(
+  instance: string,
+  service: RealServiceId,
+  tail = 200,
+): Promise<{ logs: string }> {
+  return request(`/api/instances/${instance}/services/${service}/logs?tail=${tail}`);
+}
+
+export type AgentRunStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface AgentRun {
+  id: string;
+  status: AgentRunStatus;
+  repoUrl: string;
+  model: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export function startOtelAgent(
+  instance: string,
+  payload: { repoUrl: string; githubToken: string; model?: string; baseBranch?: string; maxFiles?: number },
+): Promise<AgentRun> {
+  return request(`/api/instances/${instance}/agents/otel-pr`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listOtelAgentRuns(instance: string): Promise<{ runs: AgentRun[] }> {
+  return request(`/api/instances/${instance}/agents/otel-pr`);
+}
+
+export function getOtelAgentLogs(instance: string, run: string, tail = 500): Promise<{ logs: string }> {
+  return request(`/api/instances/${instance}/agents/otel-pr/${run}/logs?tail=${tail}`);
+}
 
 export interface ResourceItem {
   id: string;
