@@ -45,7 +45,13 @@ async function waitHttp(url: string, ms: number, init?: RequestInit): Promise<Re
 }
 
 async function api(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`${API}${path}`, { ...init, headers: { ...auth, 'content-type': 'application/json', ...init.headers } });
+  // only set a JSON content-type when there is a body — Fastify rejects empty JSON bodies
+  const headers: Record<string, string> = {
+    ...auth,
+    ...(init.body ? { 'content-type': 'application/json' } : {}),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
+  return fetch(`${API}${path}`, { ...init, headers });
 }
 
 test('kind e2e: instance lifecycle via HTTP API', { skip: !RUN, timeout: 25 * 60_000 }, async (t) => {
