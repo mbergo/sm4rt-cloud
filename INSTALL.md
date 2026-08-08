@@ -8,6 +8,8 @@ Kubernetes cluster. Everything real — no mocks.
 - Ubuntu 22.04+ (any Linux with Docker works), 4+ GB RAM per machine
 - A domain with **one wildcard DNS record**: `*.cloud.example.com → <main machine IP>`
 - Ports 80/443 reachable on the main machine (for Let's Encrypt + traffic)
+- Between machines (LAN): `2377/tcp`, `7946/tcp+udp`, `4789/udp` (Swarm
+  management, gossip and overlay networking — usually open by default on a LAN)
 
 That's it. No cloud account, no external services.
 
@@ -46,7 +48,9 @@ sudo REGISTRY_USER=you REGISTRY_PASS=ghp_xxx bash install.sh
 From the main machine, with SSH key access to the workers:
 
 ```bash
-./install/add-node.sh ubuntu@10.0.0.12 ubuntu@10.0.0.13 ubuntu@10.0.0.14
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh
+chmod +x add-node.sh
+./add-node.sh ubuntu@10.0.0.12 ubuntu@10.0.0.13 ubuntu@10.0.0.14
 ```
 
 Each worker gets Docker installed and joins the swarm. Capacity shows up
@@ -57,10 +61,12 @@ admin page and run it manually on any machine.
 
 ```bash
 # machine 1 (main)
-sudo bash install/install.sh            # → console + admin live
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
+                                        # → console + admin live
 
-# machines 2-4
-./install/add-node.sh user@m2 user@m3 user@m4
+# still on machine 1: join machines 2-4
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh && chmod +x add-node.sh
+./add-node.sh user@m2 user@m3 user@m4
 
 # verify
 open https://cloud.example.com/admin    # 4 nodes, capacity bars

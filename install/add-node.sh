@@ -21,6 +21,7 @@ MANAGER_ADDR="$(docker info --format '{{.Swarm.NodeAddr}}')"
 
 for target in "$@"; do
   bold "→ $target"
+  # shellcheck disable=SC2087  # TOKEN/MANAGER_ADDR expand client-side by design
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$target" bash -s <<REMOTE
 set -euo pipefail
 if ! command -v docker >/dev/null; then
