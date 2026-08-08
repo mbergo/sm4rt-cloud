@@ -45,7 +45,7 @@ are issued on demand via Let's Encrypt.
 Main machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mbergo/floci-cloud/main/install/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 ```
 
 The wizard asks for domain, Let's Encrypt email, admin credentials and images,
@@ -157,7 +157,7 @@ make dev-ui    # Vite dev server proxying /api
 make build     # production UI bundle
 ```
 
-Images are published to `ghcr.io/mbergo/floci-cloud` (control plane) and
+Images are published to `ghcr.io/mbergo/sm4rt-cloud` (control plane) and
 `ghcr.io/mbergo/floci` (engine) by CI.
 
 ## Naming

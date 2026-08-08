@@ -18,7 +18,7 @@ That's it. No cloud account, no external services.
 ### 1. Main machine (~5 min)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mbergo/floci-cloud/main/install/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 ```
 
 The wizard asks for: domain, Let's Encrypt email (empty = plain HTTP),
@@ -124,7 +124,7 @@ is room. The admin page shows per-node totals and live usage.
 
 ```bash
 # swarm
-docker service update --image ghcr.io/mbergo/floci-cloud:latest floci-cloud
+docker service update --image ghcr.io/mbergo/sm4rt-cloud:latest floci-cloud
 
 # kubernetes
 helm upgrade floci-cloud charts/floci-cloud --reuse-values
