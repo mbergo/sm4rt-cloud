@@ -1,0 +1,50 @@
+# floci-cloud Helm values
+
+image:
+  repository: ghcr.io/mbergo/floci-cloud
+  tag: latest
+  pullPolicy: Always
+  # name of an imagePullSecret, empty = public image
+  pullSecret: ""
+
+# image used for tenant instances (the emulator)
+flociImage: ghcr.io/mbergo/floci:latest
+
+# Base domain: instances become <name>.<domain>, console at cloud.<domain>
+instanceDomain: cloud.local
+instanceTls: false
+
+# Console auth: token | clerk | open
+auth:
+  # static token; empty = generated at install
+  token: ""
+  clerk:
+    secretKey: ""
+    publishableKey: ""
+
+admin:
+  user: admin
+  pass: floci-admin
+
+# How tenant instances are exposed:
+#   ingress  — one Ingress per instance (requires ingress controller + wildcard DNS)
+#   gateway  — Gateway API HTTPRoutes (requires Gateway controller, e.g. Envoy Gateway)
+routing:
+  mode: ingress
+  ingressClass: nginx
+  clusterIssuer: ""          # cert-manager ClusterIssuer for TLS (optional)
+  gatewayName: floci
+  gatewayNamespace: envoy-gateway-system
+
+console:
+  ingress:
+    enabled: true
+    host: ""                 # default: cloud.<instanceDomain>
+    tlsSecret: floci-cloud-tls
+
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits: { cpu: 500m, memory: 256Mi }
+
+nodeSelector: {}
+tolerations: []

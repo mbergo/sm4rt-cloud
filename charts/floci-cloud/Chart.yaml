@@ -1,0 +1,8 @@
+apiVersion: v2
+name: floci-cloud
+description: Self-hosted AWS-compatible cloud — console, API and provisioner
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords: [aws, cloud, self-hosted, floci]
+home: https://github.com/mbergo/floci-cloud

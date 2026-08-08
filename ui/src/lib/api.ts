@@ -33,6 +33,10 @@ export function setTokenProvider(provider: TokenProvider | null): void {
   tokenProvider = provider;
 }
 
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? '';
 }
@@ -82,6 +86,19 @@ export function deleteInstance(name: string): Promise<void> {
 
 export function getLogs(name: string, tail = 300): Promise<{ logs: string }> {
   return request(`/api/instances/${name}/logs?tail=${tail}`);
+}
+
+export interface ProvisionEvent {
+  ts: string;
+  kind: 'info' | 'ok' | 'err' | 'done';
+  line: string;
+}
+
+/** Live provisioning terminal — SSE with token via query (EventSource can't set headers). */
+export async function openProvisionEvents(name: string): Promise<EventSource> {
+  const bearer = (tokenProvider ? await tokenProvider() : null) ?? getToken();
+  const qs = bearer ? `?access_token=${encodeURIComponent(bearer)}` : '';
+  return new EventSource(`/api/instances/${name}/events${qs}`);
 }
 
 export type ServiceId =

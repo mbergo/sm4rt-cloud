@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Show, useAuth } from '@clerk/react';
 import {
   ApiError,
+  clearToken,
   deleteInstance,
+  getToken as getStoredToken,
   listInstances,
   setTokenProvider,
   type Instance,
@@ -13,6 +15,9 @@ import Console from './components/Console';
 import Header from './components/Header';
 import InstanceCard from './components/InstanceCard';
 import Login from './components/Login';
+import TokenLogin from './components/TokenLogin';
+import Admin from './components/Admin';
+import { useConfig } from './lib/config';
 import { PrimaryButton, Toast } from './components/bits';
 
 interface ToastState {
@@ -21,25 +26,35 @@ interface ToastState {
 }
 
 export default function App() {
+  const config = useConfig();
+  if (window.location.pathname.startsWith('/admin')) {
+    return <Admin />;
+  }
+  if (config.authMode === 'clerk' && config.clerkPublishableKey) {
+    return <ClerkGate />;
+  }
+  if (config.authMode === 'token') {
+    return <TokenGate />;
+  }
+  return <Dashboard onUnauthorized={() => undefined} showUserButton={false} />;
+}
+
+function ClerkGate() {
   return (
     <>
       <Show when="signed-out">
         <Login />
       </Show>
       <Show when="signed-in">
-        <Dashboard />
+        <ClerkDashboard />
       </Show>
     </>
   );
 }
 
-function Dashboard() {
+function ClerkDashboard() {
   const { getToken, signOut } = useAuth();
   const [ready, setReady] = useState(false);
-  const [instances, setInstances] = useState<Instance[] | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
 
   useEffect(() => {
     setTokenProvider(() => getToken());
@@ -48,6 +63,41 @@ function Dashboard() {
       setTokenProvider(null);
     };
   }, [getToken]);
+
+  if (!ready) {
+    return null;
+  }
+  return <Dashboard onUnauthorized={() => void signOut()} showUserButton />;
+}
+
+function TokenGate() {
+  const [signedIn, setSignedIn] = useState(() => Boolean(getStoredToken()));
+
+  if (!signedIn) {
+    return <TokenLogin onSignedIn={() => setSignedIn(true)} />;
+  }
+  return (
+    <Dashboard
+      onUnauthorized={() => {
+        clearToken();
+        setSignedIn(false);
+      }}
+      showUserButton={false}
+    />
+  );
+}
+
+function Dashboard({
+  onUnauthorized,
+  showUserButton,
+}: {
+  onUnauthorized: () => void;
+  showUserButton: boolean;
+}) {
+  const [instances, setInstances] = useState<Instance[] | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const notify = useCallback((message: string, tone: ToastState['tone'] = 'ok') => {
     setToast({ message, tone });
@@ -59,19 +109,16 @@ function Dashboard() {
       .then((data) => setInstances(data.instances))
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          void signOut();
+          onUnauthorized();
         }
       });
-  }, [signOut]);
+  }, [onUnauthorized]);
 
   useEffect(() => {
-    if (!ready) {
-      return;
-    }
     refresh();
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
-  }, [ready, refresh]);
+  }, [refresh]);
 
   if (selected) {
     return (
@@ -79,6 +126,7 @@ function Dashboard() {
         <Header
           instanceCount={instances?.length ?? 0}
           onCreate={() => setCreateOpen(true)}
+          showUserButton={showUserButton}
         />
         <Console
           name={selected}
@@ -109,7 +157,8 @@ function Dashboard() {
       <Header
         instanceCount={instances?.length ?? 0}
         onCreate={() => setCreateOpen(true)}
-      />
+        showUserButton={showUserButton}
+        />
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         {instances === null ? (
