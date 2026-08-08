@@ -42,6 +42,23 @@ const AGENT_MODEL_LABEL = 'floci.cloud/agent-model';
 const DOCKER_SOCK = process.env.DOCKER_SOCK ?? '/var/run/docker.sock';
 const IN_CONTAINER = existsSync('/.dockerenv');
 
+// Optional registry credentials so swarm nodes can pull private images
+// (e.g. a private GHCR floci image). Sent as X-Registry-Auth on service
+// create, which swarm distributes to workers.
+const REGISTRY_SERVER = process.env.REGISTRY_SERVER ?? 'ghcr.io';
+const REGISTRY_USER = process.env.REGISTRY_USER ?? '';
+const REGISTRY_PASS = process.env.REGISTRY_PASS ?? '';
+
+function registryAuthFor(image: string): Docker.AuthConfig | undefined {
+  if (!REGISTRY_USER || !REGISTRY_PASS) return undefined;
+  if (!image.startsWith(`${REGISTRY_SERVER}/`)) return undefined;
+  return {
+    username: REGISTRY_USER,
+    password: REGISTRY_PASS,
+    serveraddress: REGISTRY_SERVER,
+  };
+}
+
 export interface SwarmDriverOptions {
   instanceDomain: string;
   flociImage: string;
@@ -112,6 +129,17 @@ export class SwarmDriver implements CloudDriver {
   constructor(opts: SwarmDriverOptions) {
     this.opts = opts;
     this.docker = new Docker({ socketPath: DOCKER_SOCK });
+  }
+
+  /** createService, attaching registry auth when the image needs it. */
+  private createSwarmService(spec: Docker.CreateServiceOptions): Promise<Docker.Service> {
+    const image =
+      (spec.TaskTemplate as { ContainerSpec?: { Image?: string } } | undefined)?.ContainerSpec
+        ?.Image ?? '';
+    const auth = registryAuthFor(image);
+    return auth
+      ? this.docker.createService(auth, spec as Docker.ServiceSpec)
+      : this.docker.createService(spec);
   }
 
   scheme(): string {
@@ -297,7 +325,7 @@ export class SwarmDriver implements CloudDriver {
     if (ttlHours && ttlHours > 0) {
       labels[EXPIRES_LABEL] = new Date(now.getTime() + ttlHours * 3600_000).toISOString();
     }
-    await this.docker.createService({
+    await this.createSwarmService({
       Name: this.instanceServiceName(name),
       Labels: labels,
       TaskTemplate: {
@@ -563,7 +591,7 @@ export class SwarmDriver implements CloudDriver {
       [INSTANCE_LABEL]: name,
       [SERVICE_LABEL]: service,
     };
-    await this.docker.createService({
+    await this.createSwarmService({
       Name: this.catalogServiceName(name, service),
       Labels: labels,
       TaskTemplate: {
@@ -595,7 +623,7 @@ export class SwarmDriver implements CloudDriver {
       const sidecarEnv = (sidecar.env ?? []).map(
         (e) => `${e.name}=${e.value.replaceAll('localhost', serviceHost)}`,
       );
-      await this.docker.createService({
+      await this.createSwarmService({
         Name: `${this.catalogServiceName(name, service)}-${sidecar.name}`,
         Labels: {
           [MANAGED_LABEL]: MANAGED_BY,

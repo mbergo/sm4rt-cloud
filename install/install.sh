@@ -40,6 +40,13 @@ prompt ADMIN_PASS      "Admin password" "floci-admin"
 prompt CLOUD_TOKEN     "Console access token (empty = generate)" ""
 prompt FLOCI_CLOUD_IMAGE "floci-cloud image" "ghcr.io/mbergo/floci-cloud:latest"
 prompt FLOCI_IMAGE     "floci emulator image" "ghcr.io/mbergo/floci:latest"
+prompt REGISTRY_USER   "Registry username (empty = public images only)" ""
+if [ -n "$REGISTRY_USER" ]; then
+  prompt REGISTRY_PASS   "Registry token/password" ""
+  prompt REGISTRY_SERVER "Registry server" "ghcr.io"
+else
+  REGISTRY_PASS=""; REGISTRY_SERVER="ghcr.io"
+fi
 
 if [ -z "$CLOUD_TOKEN" ]; then
   CLOUD_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
@@ -95,6 +102,10 @@ fi
 ok "caddy running (ports 80/443, admin on overlay :2019)"
 
 # ── 5. floci images ─────────────────────────────────────────────────────────
+if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASS" ]; then
+  printf '%s' "$REGISTRY_PASS" | docker login "$REGISTRY_SERVER" -u "$REGISTRY_USER" --password-stdin >/dev/null
+  ok "logged in to $REGISTRY_SERVER as $REGISTRY_USER"
+fi
 bold "Pulling images (this can take a few minutes)…"
 docker pull "$FLOCI_CLOUD_IMAGE" >/dev/null && ok "pulled $FLOCI_CLOUD_IMAGE"
 docker pull "$FLOCI_IMAGE" >/dev/null && ok "pulled $FLOCI_IMAGE" || warn "could not pull $FLOCI_IMAGE — instances will pull on demand"
@@ -118,6 +129,10 @@ docker service create --name floci-cloud \
   --env CADDY_ADMIN_URL=http://caddy:2019 \
   --env SELF_UPSTREAM=floci-cloud:8080 \
   ${ACME_EMAIL:+--env ACME_EMAIL="$ACME_EMAIL"} \
+  ${REGISTRY_USER:+--env REGISTRY_USER="$REGISTRY_USER"} \
+  ${REGISTRY_PASS:+--env REGISTRY_PASS="$REGISTRY_PASS"} \
+  ${REGISTRY_USER:+--env REGISTRY_SERVER="$REGISTRY_SERVER"} \
+  --with-registry-auth \
   --restart-condition any \
   "$FLOCI_CLOUD_IMAGE" >/dev/null
 ok "floci-cloud deployed"
