@@ -38,6 +38,51 @@ One wildcard DNS record (`*.your-domain → main machine IP`) is all the DNS you
 ever configure. New workspaces and services get subdomains instantly; TLS certs
 are issued on demand via Let's Encrypt.
 
+## Multi-machine topology (swarm)
+
+What actually runs where on a bare-metal / VM install:
+
+```mermaid
+graph TB
+    DNS["DNS: *.your-domain → machine 1 IP"] --> Caddy
+
+    subgraph M1["Machine 1 — manager (install.sh)"]
+        Caddy["Caddy edge :80/:443 — on-demand TLS"]
+        CP["SM4RT-CLOUD control plane (console + API + admin)"]
+    end
+
+    subgraph M2["Machine 2 — worker (add-node.sh)"]
+        WSa["workspace: floci engine"]
+        SVCa["catalog service (Kafka, …)"]
+    end
+
+    subgraph M3["Machine 3 — worker"]
+        WSb["workspace: floci engine"]
+    end
+
+    subgraph M4["Machine 4 — worker"]
+        WSc["workspace: floci engine"]
+    end
+
+    Caddy --> CP
+    Caddy -.->|"overlay network floci-net"| WSa & WSb & WSc & SVCa
+    CP -->|"Docker Swarm API (schedules containers)"| M2 & M3 & M4
+```
+
+- **Machine 1** (`install.sh`): becomes the Swarm **manager**. Runs the Caddy
+  edge and the control plane (both pinned with `node.role==manager`), and
+  creates the `floci-net` overlay network that spans every machine.
+- **Machines 2..N** (`add-node.sh user@host …`, run *from* machine 1 over SSH):
+  installs Docker if missing and joins as **workers**. Pure capacity.
+- **Workspaces & catalog services**: the Swarm scheduler places them on any
+  machine with free capacity. All traffic enters through machine 1; the overlay
+  network routes it to wherever the container landed. The admin area shows
+  per-node usage.
+- **Ports**: 80/443 public on machine 1 only. Between machines:
+  `2377/tcp` (management), `7946/tcp+udp` (gossip), `4789/udp` (overlay VXLAN).
+- **Failure model**: workers can come and go (workspaces reschedule); machine 1
+  is the single point of entry — promote extra managers if you need HA.
+
 ## Install
 
 ### Option A — machines (bare metal / VMs, Ubuntu)
@@ -55,7 +100,9 @@ console. At the end it prints the console URL, admin URL and access token.
 Add capacity (from the main machine, with SSH access to the others):
 
 ```bash
-./install/add-node.sh ubuntu@10.0.0.12 ubuntu@10.0.0.13 ubuntu@10.0.0.14
+curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh
+chmod +x add-node.sh
+./add-node.sh ubuntu@10.0.0.12 ubuntu@10.0.0.13 ubuntu@10.0.0.14
 ```
 
 Non-interactive / private registry:

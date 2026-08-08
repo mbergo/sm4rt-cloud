@@ -25,12 +25,15 @@ DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 prompt() { # var, question, default
   local var="$1" q="$2" def="$3" answer
   if [ -n "${!var:-}" ]; then return; fi
+  # piped install (curl | bash): stdin is not a TTY, read from /dev/tty
   if [ -t 0 ]; then
     read -r -p "$q [$def]: " answer || true
-    printf -v "$var" '%s' "${answer:-$def}"
+  elif [ -r /dev/tty ]; then
+    read -r -p "$q [$def]: " answer < /dev/tty || true
   else
-    printf -v "$var" '%s' "$def"
+    answer=""
   fi
+  printf -v "$var" '%s' "${answer:-$def}"
 }
 
 prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $DEFAULT_IP)" "cloud.local"
@@ -63,11 +66,82 @@ echo "    tls           ${INSTANCE_TLS} (on-demand Let's Encrypt)"
 echo "    driver        docker swarm"
 bold ""
 
-# ── 2. docker ───────────────────────────────────────────────────────────────
+# ── 2. preflight + dependencies ─────────────────────────────────────────────
+OS_TYPE="$(grep -w ID /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
+case "$OS_TYPE" in
+  pop|linuxmint|zorin) OS_TYPE=ubuntu ;;
+  manjaro|manjaro-arm|endeavouros|cachyos) OS_TYPE=arch ;;
+  fedora-asahi-remix) OS_TYPE=fedora ;;
+esac
+
+# disk / ram sanity (warn only)
+AVAIL_GB="$(df -BG / 2>/dev/null | awk 'NR==2 {gsub("G","",$4); print $4}')"
+TOTAL_RAM_MB="$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+[ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -lt 15 ] && warn "only ${AVAIL_GB}GB free on / — 15GB+ recommended (images + workspaces)"
+[ -n "$TOTAL_RAM_MB" ] && [ "$TOTAL_RAM_MB" -lt 3500 ] && warn "only ${TOTAL_RAM_MB}MB RAM — 4GB+ recommended"
+
+# docker via snap is unsupported (breaks swarm networking)
+if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+  die "Docker installed via snap is not supported — 'snap remove docker' and rerun"
+fi
+
+ensure_packages() { # minimal deps: curl + ca certs + openssl
+  case "$OS_TYPE" in
+    ubuntu|debian|raspbian)
+      apt-get update -y >/dev/null
+      apt-get install -y curl ca-certificates openssl >/dev/null ;;
+    centos|fedora|rhel|ol|rocky|almalinux|amzn)
+      command -v dnf >/dev/null || yum install -y dnf >/dev/null
+      dnf install -y curl ca-certificates openssl >/dev/null ;;
+    arch) pacman -Sy --noconfirm --needed curl ca-certificates openssl >/dev/null ;;
+    alpine) apk add --no-cache curl ca-certificates openssl >/dev/null ;;
+    sles|opensuse-leap|opensuse-tumbleweed) zypper install -y curl ca-certificates openssl >/dev/null ;;
+    *) warn "unknown distro '$OS_TYPE' — assuming curl/openssl are present" ;;
+  esac
+}
+command -v openssl >/dev/null 2>&1 || ensure_packages
+ok "base packages (distro: ${OS_TYPE:-unknown})"
+
+install_docker_fallback() { # when get.docker.com fails
+  case "$OS_TYPE" in
+    ubuntu|debian|raspbian)
+      apt-get update -y >/dev/null
+      apt-get install -y ca-certificates curl >/dev/null
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL "https://download.docker.com/linux/$OS_TYPE/gpg" -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$OS_TYPE $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update -y >/dev/null
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null ;;
+    centos|fedora|rhel|ol|rocky|almalinux)
+      dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null 2>&1 || true
+      dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null ;;
+    arch) pacman -Syu --noconfirm --needed docker >/dev/null ;;
+    alpine) apk add --no-cache docker docker-cli-compose >/dev/null ;;
+    sles|opensuse-leap|opensuse-tumbleweed) zypper install -y docker >/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
 if ! command -v docker >/dev/null; then
   bold "Installing Docker…"
-  curl -fsSL https://get.docker.com | sh
+  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 || true
+  if ! command -v docker >/dev/null; then
+    warn "get.docker.com failed — trying distro packages"
+    install_docker_fallback || die "could not install Docker automatically — install it manually and rerun"
+  fi
 fi
+# make sure the daemon is enabled and running (fresh installs on some distros)
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl enable --now docker >/dev/null 2>&1 || true
+elif command -v rc-update >/dev/null 2>&1; then
+  rc-update add docker default >/dev/null 2>&1 || true
+  service docker start >/dev/null 2>&1 || true
+fi
+docker info >/dev/null 2>&1 || die "docker daemon is not running"
+DOCKER_MAJOR="$(docker --version | sed 's/[^0-9]*\([0-9]*\).*/\1/')"
+[ -n "$DOCKER_MAJOR" ] && [ "$DOCKER_MAJOR" -lt 24 ] && warn "docker ${DOCKER_MAJOR}.x is old — 24+ recommended"
 ok "docker $(docker --version | awk '{print $3}' | tr -d ',')"
 
 # ── 3. swarm ────────────────────────────────────────────────────────────────
