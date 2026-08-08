@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # floci-cloud installer — main machine (Ubuntu, Docker Swarm driver).
 #
-#   curl -fsSL https://raw.githubusercontent.com/mbergo/floci-cloud/main/install/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 #
 # Next-next-finish: asks a few questions, then brings up a complete
 # self-hosted cloud (Swarm + Caddy with on-demand Let's Encrypt + console).
@@ -38,7 +38,7 @@ prompt ACME_EMAIL      "Email for Let's Encrypt (empty = disable TLS, plain HTTP
 prompt ADMIN_USER      "Admin username" "admin"
 prompt ADMIN_PASS      "Admin password" "floci-admin"
 prompt CLOUD_TOKEN     "Console access token (empty = generate)" ""
-prompt FLOCI_CLOUD_IMAGE "floci-cloud image" "ghcr.io/mbergo/floci-cloud:latest"
+prompt FLOCI_CLOUD_IMAGE "sm4rt-cloud image" "ghcr.io/mbergo/sm4rt-cloud:latest"
 prompt FLOCI_IMAGE     "floci emulator image" "ghcr.io/mbergo/floci:latest"
 prompt REGISTRY_USER   "Registry username (empty = public images only)" ""
 if [ -n "$REGISTRY_USER" ]; then

@@ -1,6 +1,6 @@
 name: release
 
-# Pushes ghcr.io/<owner>/floci-cloud on every main push (latest + sha)
+# Pushes ghcr.io/<owner>/sm4rt-cloud on every main push (latest + sha)
 # and on tags (semver). Public image — installers pull without credentials.
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
       - name: Compute image tags
         id: tags
         run: |
-          img="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/floci-cloud"
+          img="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sm4rt-cloud"
           {
             echo "tags<<EOF"
             echo "${img}:sha-${GITHUB_SHA::12}"

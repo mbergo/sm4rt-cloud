@@ -5,4 +5,4 @@ type: application
 version: 0.1.0
 appVersion: "1.0"
 keywords: [aws, cloud, self-hosted, floci]
-home: https://github.com/mbergo/floci-cloud
+home: https://github.com/mbergo/sm4rt-cloud

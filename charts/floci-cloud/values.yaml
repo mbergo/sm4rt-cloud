@@ -1,7 +1,7 @@
 # floci-cloud Helm values
 
 image:
-  repository: ghcr.io/mbergo/floci-cloud
+  repository: ghcr.io/mbergo/sm4rt-cloud
   tag: latest
   pullPolicy: Always
   # name of an imagePullSecret, empty = public image
