@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "node --watch src/server.ts",
-    "start": "node src/server.ts"
+    "start": "node src/server.ts",
+    "test": "node --test tests/names.test.ts tests/resources.test.ts",
+    "test:e2e": "RUN_KIND=1 node --test --test-concurrency 1 tests/e2e-kind.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewayv2": "^3.1097.0",
@@ -44,5 +46,8 @@
     "@kubernetes/client-node": "^1.4.0",
     "fastify": "^5.10.0",
     "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3"
   }
 }
