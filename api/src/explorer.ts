@@ -8,6 +8,8 @@ export interface ExplorerService {
   scope: string;
   sampleOp: string;
   sampleBody: string;
+  /** AWS JSON protocol version — DynamoDB, SFN, CloudControl speak 1.0; everything else 1.1 */
+  jsonVersion?: '1.0' | '1.1';
 }
 
 export const EXPLORER_SERVICES: ExplorerService[] = [
@@ -24,7 +26,7 @@ export const EXPLORER_SERVICES: ExplorerService[] = [
   { id: 'bcm-data-exports', proto: 'JSON', target: 'AWSBillingAndCostManagementDataExports.', scope: 'bcm-data-exports', sampleOp: "ListExports", sampleBody: "{}" },
   { id: 'bedrock-runtime', proto: 'REST_JSON', target: null, scope: 'bedrock', sampleOp: "POST /model/gemma/invoke", sampleBody: "{\"prompt\":\"hi\"}" },
   { id: 'ce', proto: 'JSON', target: 'AWSInsightsIndexService.', scope: 'ce', sampleOp: "GetCostAndUsage", sampleBody: "{\"TimePeriod\":{\"Start\":\"2026-01-01\",\"End\":\"2026-02-01\"},\"Granularity\":\"MONTHLY\",\"Metrics\":[\"UnblendedCost\"]}" },
-  { id: 'cloudcontrol', proto: 'JSON', target: 'CloudApiService.', scope: 'cloudcontrolapi', sampleOp: "ListResources", sampleBody: "{\"TypeName\":\"AWS::S3::Bucket\"}" },
+  { id: 'cloudcontrol', proto: 'JSON', target: 'CloudApiService.', scope: 'cloudcontrolapi', sampleOp: "ListResources", sampleBody: "{\"TypeName\":\"AWS::S3::Bucket\"}", jsonVersion: '1.0' },
   { id: 'cloudformation', proto: 'QUERY', target: null, scope: 'cloudformation', sampleOp: "DescribeStacks", sampleBody: "" },
   { id: 'cloudfront', proto: 'REST_XML', target: null, scope: 'cloudfront', sampleOp: "GET /2020-05-31/distribution", sampleBody: "" },
   { id: 'cloudtrail', proto: 'JSON', target: 'CloudTrail_20131101.', scope: 'cloudtrail', sampleOp: "DescribeTrails", sampleBody: "{}" },
@@ -35,7 +37,7 @@ export const EXPLORER_SERVICES: ExplorerService[] = [
   { id: 'config', proto: 'JSON', target: 'StarlingDoveService.', scope: 'config', sampleOp: "DescribeConfigRules", sampleBody: "{}" },
   { id: 'cur', proto: 'JSON', target: 'AWSOrigamiServiceGatewayService.', scope: 'cur', sampleOp: "DescribeReportDefinitions", sampleBody: "{}" },
   { id: 'docdb', proto: 'QUERY', target: null, scope: 'docdb', sampleOp: "DescribeDBClusters", sampleBody: "" },
-  { id: 'dynamodb', proto: 'JSON', target: 'DynamoDB_20120810.', scope: 'dynamodb', sampleOp: "ListTables", sampleBody: "{}" },
+  { id: 'dynamodb', proto: 'JSON', target: 'DynamoDB_20120810.', scope: 'dynamodb', sampleOp: "ListTables", sampleBody: "{}", jsonVersion: '1.0' },
   { id: 'ec2', proto: 'QUERY', target: null, scope: 'ec2', sampleOp: "DescribeInstances", sampleBody: "" },
   { id: 'ecr', proto: 'JSON', target: 'AmazonEC2ContainerRegistry_V20150921.', scope: 'ecr', sampleOp: "DescribeRepositories", sampleBody: "{}" },
   { id: 'ecs', proto: 'JSON', target: 'AmazonEC2ContainerServiceV20141113.', scope: 'ecs', sampleOp: "ListClusters", sampleBody: "{}" },
@@ -76,7 +78,7 @@ export const EXPLORER_SERVICES: ExplorerService[] = [
   { id: 'sns', proto: 'QUERY', target: 'SNS_20100331.', scope: 'sns', sampleOp: "ListTopics", sampleBody: "" },
   { id: 'sqs', proto: 'QUERY', target: 'AmazonSQS.', scope: 'sqs', sampleOp: "ListQueues", sampleBody: "" },
   { id: 'ssm', proto: 'JSON', target: 'AmazonSSM.', scope: 'ssm', sampleOp: "DescribeParameters", sampleBody: "{}" },
-  { id: 'states', proto: 'JSON', target: 'AWSStepFunctions.', scope: 'states', sampleOp: "ListStateMachines", sampleBody: "{}" },
+  { id: 'states', proto: 'JSON', target: 'AWSStepFunctions.', scope: 'states', sampleOp: "ListStateMachines", sampleBody: "{}", jsonVersion: '1.0' },
   { id: 'sts', proto: 'QUERY', target: null, scope: 'sts', sampleOp: "GetCallerIdentity", sampleBody: "" },
   { id: 'tagging', proto: 'JSON', target: 'ResourceGroupsTaggingAPI_20170126.', scope: 'tagging', sampleOp: "GetResources", sampleBody: "{}" },
   { id: 'textract', proto: 'JSON', target: 'Textract.', scope: 'textract', sampleOp: "ListAdapters", sampleBody: "{}" },
@@ -122,7 +124,7 @@ export async function explore(endpoint: string, req: ExploreRequest): Promise<Ex
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
     payload = `Action=${encodeURIComponent(operation)}` + (payload ? `&${payload}` : '');
   } else if (svc.proto === 'JSON' || svc.proto === 'CBOR' || svc.target) {
-    headers['Content-Type'] = 'application/x-amz-json-1.1';
+    headers['Content-Type'] = `application/x-amz-json-${svc.jsonVersion ?? '1.1'}`;
     headers['X-Amz-Target'] = `${svc.target ?? ''}${operation}`;
     payload = payload ?? '{}';
   } else {

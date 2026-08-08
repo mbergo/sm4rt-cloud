@@ -1,0 +1,109 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            ui/package-lock.json
+      - name: install api deps
+        run: npm ci
+        working-directory: api
+      - name: typecheck api + tests
+        run: >
+          npx -y -p typescript@5.7.2 tsc --noEmit --allowImportingTsExtensions
+          --module nodenext --target es2022 --moduleResolution nodenext --skipLibCheck
+          src/server.ts src/k8s.ts src/resources.ts src/services.ts
+          tests/names.test.ts tests/resources.test.ts tests/e2e-kind.test.ts
+        working-directory: api
+      - name: unit tests (names)
+        run: node --test tests/names.test.ts
+        working-directory: api
+      - name: install ui deps
+        run: npm ci
+        working-directory: ui
+      - name: build ui
+        run: npm run build
+        working-directory: ui
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2ktcGxhY2Vob2xkZXIuZXhhbXBsZS5jb20k
+
+  emulator-integration:
+    name: emulator-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      floci:
+        image: floci/floci:latest
+        ports:
+          - 4566:4566
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: install api deps
+        run: npm ci
+        working-directory: api
+      - name: ResourceGateway + Explorer against real floci
+        run: node --test --test-reporter spec tests/resources.test.ts
+        working-directory: api
+        env:
+          FLOCI_ENDPOINT: http://127.0.0.1:4566
+
+  kind-e2e:
+    name: kind-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: floci-ci
+      - name: preload emulator image into kind
+        run: |
+          docker pull floci/floci:latest
+          kind load docker-image floci/floci:latest --name floci-ci
+      - name: install api deps
+        run: npm ci
+        working-directory: api
+      - name: e2e — provision instance, S3 roundtrip, service start/stop, reaper
+        run: node --test --test-reporter spec --test-concurrency 1 tests/e2e-kind.test.ts
+        working-directory: api
+        env:
+          RUN_KIND: '1'
+      - name: debug cluster state on failure
+        if: failure()
+        run: |
+          kubectl get ns
+          kubectl get pods -A -o wide
+          for ns in $(kubectl get ns -o name | grep floci-i- | cut -d/ -f2); do
+            echo "--- $ns"
+            kubectl -n "$ns" describe pods | tail -60
+            kubectl -n "$ns" logs deploy/floci --tail=50 || true
+          done
