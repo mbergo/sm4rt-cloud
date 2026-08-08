@@ -1,5 +1,4 @@
 import {
-  ApiException,
   AppsV1Api,
   BatchV1Api,
   CoreV1Api,
@@ -23,6 +22,31 @@ import {
   type RealServiceInfo,
   type RealServiceStatus,
 } from './services.ts';
+import { emit } from './events.ts';
+import type {
+  CloudDriver,
+  InstanceInfo,
+  InstanceMetrics,
+  InstanceStatus,
+  NodeInfo,
+  OtelAgentOptions,
+  OtelAgentRun,
+  OtelAgentRunStatus,
+} from './driver.ts';
+import { isConflict, isNotFound, statusCodeOf } from './driver.ts';
+
+// re-exported for backwards compatibility with existing imports
+export {
+  isConflict,
+  isNotFound,
+  type InstanceInfo,
+  type InstanceMetrics,
+  type InstanceStatus,
+  type OtelAgentOptions,
+  type OtelAgentRun,
+  type OtelAgentRunStatus,
+  type ServiceMetrics,
+} from './driver.ts';
 
 const MANAGED_BY = 'floci-cloud';
 const NS_PREFIX = 'floci-i-';
@@ -60,20 +84,6 @@ function podFailureReason(pod: V1Pod): string | null {
   return null;
 }
 
-export type InstanceStatus = 'provisioning' | 'running' | 'error' | 'deleting';
-
-export interface InstanceInfo {
-  name: string;
-  status: InstanceStatus;
-  statusDetail: string | null;
-  host: string;
-  endpoint: string;
-  createdAt: string | null;
-  expiresAt: string | null;
-  image: string;
-  readyReplicas: number;
-}
-
 export interface ProvisionerOptions {
   instanceDomain: string;
   flociImage: string;
@@ -83,60 +93,6 @@ export interface ProvisionerOptions {
   /** when set, expose hosts via Gateway API HTTPRoutes attached to this Gateway instead of Ingress */
   gatewayName?: string;
   gatewayNamespace?: string;
-}
-
-function statusCodeOf(err: unknown): number | undefined {
-  if (err instanceof ApiException) {
-    return err.code;
-  }
-  const candidate = err as { code?: unknown; statusCode?: unknown };
-  if (typeof candidate?.code === 'number') {
-    return candidate.code;
-  }
-  if (typeof candidate?.statusCode === 'number') {
-    return candidate.statusCode;
-  }
-  return undefined;
-}
-
-export function isNotFound(err: unknown): boolean {
-  return statusCodeOf(err) === 404;
-}
-
-export function isConflict(err: unknown): boolean {
-  return statusCodeOf(err) === 409;
-}
-
-export type OtelAgentRunStatus = 'pending' | 'running' | 'succeeded' | 'failed';
-
-export interface OtelAgentRun {
-  id: string;
-  status: OtelAgentRunStatus;
-  repoUrl: string;
-  model: string;
-  startedAt: string | null;
-  completedAt: string | null;
-}
-
-export interface OtelAgentOptions {
-  repoUrl: string;
-  githubToken: string;
-  model?: string;
-  baseBranch?: string;
-  maxFiles?: number;
-}
-
-export interface ServiceMetrics {
-  service: string;
-  cpuMilli: number;
-  memoryBytes: number;
-  pods: number;
-}
-
-export interface InstanceMetrics {
-  instance: string;
-  sampledAt: string;
-  services: ServiceMetrics[];
 }
 
 const MEMORY_MULTIPLIERS: Record<string, number> = {
@@ -183,7 +139,8 @@ function describeAgentJob(job: V1Job): OtelAgentRun {
   };
 }
 
-export class Provisioner {
+export class Provisioner implements CloudDriver {
+  readonly kind = 'kubernetes' as const;
   private core: CoreV1Api;
   private apps: AppsV1Api;
   private net: NetworkingV1Api;
@@ -276,6 +233,13 @@ export class Provisioner {
     return NS_PREFIX + name;
   }
 
+  awsEndpointFor(name: string): string {
+    if (process.env.KUBERNETES_SERVICE_HOST) {
+      return `http://floci.${this.namespaceFor(name)}.svc.cluster.local:4566`;
+    }
+    return `${this.scheme()}://${this.hostFor(name)}`;
+  }
+
   /** Copies the ACR pull secret into an instance namespace so private floci images can be pulled. */
   private async replicatePullSecret(namespace: string): Promise<boolean> {
     try {
@@ -343,7 +307,11 @@ export class Provisioner {
     await this.core.createNamespace({
       body: { metadata: { name: namespace, labels, annotations } },
     });
+    emit(name, 'ok', `namespace ${namespace} created`);
     const hasPullSecret = await this.replicatePullSecret(namespace);
+    if (hasPullSecret) {
+      emit(name, 'ok', 'image pull secret replicated');
+    }
 
     const deployment: V1Deployment = {
       metadata: { name: 'floci', namespace, labels },
@@ -397,6 +365,8 @@ export class Provisioner {
       },
     };
     await this.apps.createNamespacedDeployment({ namespace, body: deployment });
+    emit(name, 'ok', 'emulator deployment created (floci + dind sidecar)');
+    emit(name, 'info', `pulling image ${this.opts.flociImage} (first run may take a while)`);
 
     const service: V1Service = {
       metadata: { name: 'floci', namespace, labels },
@@ -406,6 +376,7 @@ export class Provisioner {
       },
     };
     await this.core.createNamespacedService({ namespace, body: service });
+    emit(name, 'ok', 'service floci:4566 created');
 
     if (this.gatewayMode) {
       await this.createHttpRoute({
@@ -453,6 +424,7 @@ export class Provisioner {
       };
       await this.net.createNamespacedIngress({ namespace, body: ingress });
     }
+    emit(name, 'ok', `route published: ${this.scheme()}://${host}`);
 
     const created = await this.get(name);
     if (!created) {
@@ -840,6 +812,50 @@ export class Provisioner {
       await ignoreNotFound(() => this.net.deleteNamespacedIngress({ name: workload, namespace }));
       await this.deleteHttpRoute(namespace, workload);
     }
+  }
+
+  async nodes(): Promise<NodeInfo[]> {
+    const [nodeList, nodeMetrics] = await Promise.all([
+      this.core.listNode(),
+      this.metrics.getNodeMetrics().catch(() => ({ items: [] })),
+    ]);
+    const usageByNode = new Map<string, { cpuMilli: number; memBytes: number }>();
+    for (const item of nodeMetrics.items ?? []) {
+      const nodeName = item.metadata?.name;
+      if (!nodeName) continue;
+      usageByNode.set(nodeName, {
+        cpuMilli: Math.round(parseCpuQuantity(item.usage?.cpu ?? '0')),
+        memBytes: parseMemoryQuantity(item.usage?.memory ?? '0'),
+      });
+    }
+    return (nodeList.items ?? [])
+      .map((node) => {
+        const nodeName = node.metadata?.name ?? 'unknown';
+        const labels = node.metadata?.labels ?? {};
+        const isControlPlane =
+          'node-role.kubernetes.io/control-plane' in labels ||
+          'node-role.kubernetes.io/master' in labels;
+        const ready = (node.status?.conditions ?? []).find((c) => c.type === 'Ready');
+        const internal = (node.status?.addresses ?? []).find((a) => a.type === 'InternalIP');
+        const usage = usageByNode.get(nodeName);
+        return {
+          id: node.metadata?.uid ?? nodeName,
+          hostname: nodeName,
+          role: (isControlPlane ? 'manager' : 'worker') as 'manager' | 'worker',
+          state: ready?.status === 'True' ? 'ready' : 'not-ready',
+          addr: internal?.address ?? null,
+          cpuTotalMilli: Math.round(parseCpuQuantity(node.status?.capacity?.cpu ?? '0')),
+          memTotalBytes: parseMemoryQuantity(node.status?.capacity?.memory ?? '0'),
+          cpuUsedMilli: usage?.cpuMilli ?? null,
+          memUsedBytes: usage?.memBytes ?? null,
+        };
+      })
+      .sort((a, b) => a.hostname.localeCompare(b.hostname));
+  }
+
+  async joinCommand(): Promise<string | null> {
+    // Kubernetes nodes join via kubeadm/managed control plane, not through us.
+    return null;
   }
 
   async instanceMetrics(name: string): Promise<InstanceMetrics> {

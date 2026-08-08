@@ -1,0 +1,29 @@
+{{- if .Values.console.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: floci-cloud
+  namespace: {{ .Release.Namespace }}
+  {{- if .Values.routing.clusterIssuer }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routing.clusterIssuer }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.routing.ingressClass }}
+  {{- if .Values.routing.clusterIssuer }}
+  tls:
+    - hosts: [{{ include "floci-cloud.consoleHost" . | quote }}]
+      secretName: {{ .Values.console.ingress.tlsSecret }}
+  {{- end }}
+  rules:
+    - host: {{ include "floci-cloud.consoleHost" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: floci-cloud
+                port:
+                  number: 80
+{{- end }}

@@ -1,0 +1,8 @@
+FLOCI CLOUD deployed.
+
+  Console   http{{ if .Values.instanceTls }}s{{ end }}://{{ include "floci-cloud.consoleHost" . }}
+  Admin     http{{ if .Values.instanceTls }}s{{ end }}://{{ include "floci-cloud.consoleHost" . }}/admin  ({{ .Values.admin.user }})
+
+  Token     kubectl -n {{ .Release.Namespace }} get secret floci-cloud-auth -o jsonpath='{.data.token}' | base64 -d
+
+Point a wildcard DNS record *.{{ .Values.instanceDomain }} at your ingress IP.

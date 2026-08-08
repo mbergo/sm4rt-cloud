@@ -1,6 +1,12 @@
-import { Dices, Loader2, X } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
-import { ApiError, createInstance, type Instance } from '../lib/api';
+import { Check, Copy, Dices, Loader2, Terminal, X } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  ApiError,
+  createInstance,
+  openProvisionEvents,
+  type Instance,
+  type ProvisionEvent,
+} from '../lib/api';
 import { GhostButton, PrimaryButton } from './bits';
 
 const SUGGESTION_ADJECTIVES = [
@@ -40,6 +46,20 @@ export default function CreateModal({
   const [ttl, setTtl] = useState<number | null>(24);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [instance, setInstance] = useState<Instance | null>(null);
+  const [events, setEvents] = useState<ProvisionEvent[]>([]);
+  const [ready, setReady] = useState(false);
+  const [copied, setCopied] = useState('');
+  const termRef = useRef<HTMLDivElement>(null);
+  const sourceRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    return () => sourceRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    termRef.current?.scrollTo({ top: termRef.current.scrollHeight });
+  }, [events]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -49,15 +69,133 @@ export default function CreateModal({
     setBusy(true);
     setError('');
     try {
-      const instance = await createInstance({
+      const created = await createInstance({
         name: name.trim() || undefined,
         ttlHours: ttl,
       });
-      onCreated(instance);
+      setInstance(created);
+      const source = await openProvisionEvents(created.name);
+      sourceRef.current = source;
+      source.onmessage = (message) => {
+        const parsed = JSON.parse(message.data) as ProvisionEvent;
+        setEvents((prev) => [...prev.slice(-299), parsed]);
+        if (parsed.kind === 'done') {
+          setReady(true);
+          source.close();
+        }
+      };
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create the instance.');
       setBusy(false);
     }
+  }
+
+  function copy(value: string, key: string) {
+    void navigator.clipboard.writeText(value);
+    setCopied(key);
+    setTimeout(() => setCopied(''), 1500);
+  }
+
+  function finish() {
+    if (instance) {
+      onCreated(instance);
+    }
+  }
+
+  const awsCli = instance
+    ? `aws --endpoint-url ${instance.endpoint} s3 mb s3://demo && aws --endpoint-url ${instance.endpoint} s3 ls`
+    : '';
+
+  if (instance) {
+    return (
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
+        <div
+          className="animate-rise-in w-full max-w-2xl rounded-2xl border border-white/10 bg-stone-900/95 p-6 shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="font-display flex items-center gap-2 text-lg font-bold tracking-tight">
+              <Terminal className="h-4 w-4 text-amber-300" />
+              Provisioning {instance.name}
+            </h2>
+            {ready ? (
+              <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                <Check className="h-3 w-3" /> ready
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-300">
+                <Loader2 className="h-3 w-3 animate-spin" /> provisioning
+              </span>
+            )}
+          </div>
+
+          <div
+            ref={termRef}
+            className="mt-4 h-56 overflow-y-auto rounded-xl border border-white/10 bg-black/70 p-3 font-mono text-xs leading-relaxed"
+          >
+            {events.length === 0 ? (
+              <p className="text-stone-500">waiting for events…</p>
+            ) : (
+              events.map((line, index) => (
+                <p
+                  key={index}
+                  className={
+                    line.kind === 'err'
+                      ? 'text-rose-300'
+                      : line.kind === 'ok' || line.kind === 'done'
+                        ? 'text-emerald-300'
+                        : 'text-stone-300'
+                  }
+                >
+                  <span className="mr-2 text-stone-600">
+                    {new Date(line.ts).toLocaleTimeString()}
+                  </span>
+                  {line.kind === 'ok' ? '✔ ' : line.kind === 'err' ? '✘ ' : ''}
+                  {line.line}
+                </p>
+              ))
+            )}
+          </div>
+
+          {ready ? (
+            <div className="mt-4 space-y-2 rounded-xl border border-emerald-400/20 bg-emerald-500/5 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                Instance details
+              </p>
+              {[
+                { key: 'endpoint', label: 'AWS endpoint', value: instance.endpoint },
+                { key: 'creds', label: 'Credentials', value: 'AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test' },
+                { key: 'cli', label: 'Try it', value: awsCli },
+              ].map((row) => (
+                <div key={row.key} className="flex items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-stone-400">{row.label}</span>
+                  <code className="flex-1 truncate rounded bg-black/40 px-2 py-1 font-mono text-xs text-stone-200">
+                    {row.value}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copy(row.value, row.key)}
+                    className="rounded p-1 text-stone-500 transition hover:bg-white/10 hover:text-white"
+                  >
+                    {copied === row.key ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-300" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-5 flex justify-end gap-2">
+            <PrimaryButton onClick={finish}>
+              {ready ? 'Open console' : 'Continue in background'}
+            </PrimaryButton>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -81,7 +219,7 @@ export default function CreateModal({
           </button>
         </div>
         <p className="mt-1 text-sm text-stone-400">
-          An isolated AWS environment with its own endpoint, provisioned on AKS.
+          An isolated AWS environment with its own endpoint and live provisioning terminal.
         </p>
 
         <form onSubmit={submit} className="mt-6 space-y-5">

@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floci-cloud
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: floci-cloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: floci-cloud
+  template:
+    metadata:
+      labels:
+        app: floci-cloud
+    spec:
+      serviceAccountName: floci-cloud
+      {{- if .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.image.pullSecret }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: floci-cloud
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DRIVER
+              value: kubernetes
+            - name: INSTANCE_DOMAIN
+              value: {{ .Values.instanceDomain | quote }}
+            - name: INSTANCE_TLS
+              value: {{ .Values.instanceTls | quote }}
+            - name: CONSOLE_HOST
+              value: {{ include "floci-cloud.consoleHost" . | quote }}
+            - name: FLOCI_IMAGE
+              value: {{ .Values.flociImage | quote }}
+            - name: ADMIN_USER
+              value: {{ .Values.admin.user | quote }}
+            - name: ADMIN_PASS
+              value: {{ .Values.admin.pass | quote }}
+            {{- if eq .Values.routing.mode "gateway" }}
+            - name: GATEWAY_NAME
+              value: {{ .Values.routing.gatewayName | quote }}
+            - name: GATEWAY_NAMESPACE
+              value: {{ .Values.routing.gatewayNamespace | quote }}
+            {{- else }}
+            - name: INGRESS_CLASS
+              value: {{ .Values.routing.ingressClass | quote }}
+            {{- end }}
+            {{- if .Values.routing.clusterIssuer }}
+            - name: CLUSTER_ISSUER
+              value: {{ .Values.routing.clusterIssuer | quote }}
+            {{- end }}
+            - name: FLOCI_CLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: floci-cloud-auth
+                  key: token
+            {{- if .Values.auth.clerk.secretKey }}
+            - name: CLERK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: floci-cloud-clerk
+                  key: secret-key
+            - name: CLERK_PUBLISHABLE_KEY
+              value: {{ .Values.auth.clerk.publishableKey | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: floci-cloud
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: floci-cloud
+spec:
+  selector:
+    app: floci-cloud
+  ports:
+    - port: 80
+      targetPort: 8080
