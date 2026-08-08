@@ -33,6 +33,14 @@ Non-interactive:
 sudo INSTANCE_DOMAIN=cloud.example.com ACME_EMAIL=you@example.com bash install.sh
 ```
 
+Private images (e.g. private GHCR): pass registry credentials — the
+installer logs in, deploys with `--with-registry-auth`, and instances
+created later reuse the credentials on every node:
+
+```bash
+sudo REGISTRY_USER=you REGISTRY_PASS=ghp_xxx bash install.sh
+```
+
 ### 2. Add workers (~1 min each)
 
 From the main machine, with SSH key access to the workers:
