@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# sm4rt — AWS CLI for your SM4RT-CLOUD workspace.
+#
+# A thin wrapper around the official aws-cli that points every call at your
+# workspace endpoint, with credentials pre-set. No AWS account involved.
+#
+#   sm4rt s3 mb s3://demo
+#   sm4rt s3 ls
+#   sm4rt sqs create-queue --queue-name jobs
+#   sm4rt configure          # set/change the workspace endpoint
+#   sm4rt endpoint           # print the current endpoint
+#
+# Configuration (first match wins):
+#   SM4RT_ENDPOINT env var        e.g. https://demo.cloud.example.com
+#   ~/.config/sm4rt/endpoint      written by `sm4rt configure`
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sm4rt"
+CONFIG_FILE="$CONFIG_DIR/endpoint"
+
+die() { printf '\033[31m✘ %s\033[0m\n' "$*" >&2; exit 1; }
+
+endpoint() {
+  if [ -n "${SM4RT_ENDPOINT:-}" ]; then
+    printf '%s' "$SM4RT_ENDPOINT"
+  elif [ -f "$CONFIG_FILE" ]; then
+    tr -d '[:space:]' < "$CONFIG_FILE"
+  else
+    printf ''
+  fi
+}
+
+configure() {
+  local current def answer
+  current="$(endpoint)"
+  def="${current:-https://demo.cloud.example.com}"
+  if [ -t 0 ]; then
+    read -r -p "Workspace endpoint [$def]: " answer || true
+  elif [ -r /dev/tty ]; then
+    read -r -p "Workspace endpoint [$def]: " answer < /dev/tty || true
+  else
+    answer=""
+  fi
+  answer="${answer:-$def}"
+  case "$answer" in
+    http://*|https://*) ;;
+    *) answer="https://$answer" ;;
+  esac
+  mkdir -p "$CONFIG_DIR"
+  printf '%s\n' "$answer" > "$CONFIG_FILE"
+  printf '✔ endpoint saved: %s\n' "$answer"
+}
+
+case "${1:-}" in
+  configure) configure; exit 0 ;;
+  endpoint)
+    ep="$(endpoint)"
+    [ -n "$ep" ] || die "no endpoint configured — run: sm4rt configure"
+    printf '%s\n' "$ep"
+    exit 0
+    ;;
+  ""|-h|--help|help)
+    sed -n '2,16{s/^# \{0,1\}//;p}' "$0"
+    exit 0
+    ;;
+esac
+
+command -v aws >/dev/null 2>&1 || \
+  die "aws-cli not found — install: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+
+EP="$(endpoint)"
+[ -n "$EP" ] || die "no endpoint configured — run: sm4rt configure  (or set SM4RT_ENDPOINT)"
+
+# Workspace endpoints accept any credentials — always use the well-known
+# test pair so real AWS credentials from the environment never leak into
+# requests. Override with SM4RT_ACCESS_KEY_ID / SM4RT_SECRET_ACCESS_KEY.
+AWS_ACCESS_KEY_ID="${SM4RT_ACCESS_KEY_ID:-test}" \
+AWS_SECRET_ACCESS_KEY="${SM4RT_SECRET_ACCESS_KEY:-test}" \
+AWS_SESSION_TOKEN="" \
+AWS_PROFILE="" \
+AWS_REGION="${SM4RT_REGION:-us-east-1}" \
+AWS_DEFAULT_REGION="${SM4RT_REGION:-us-east-1}" \
+AWS_EC2_METADATA_DISABLED=true \
+exec aws --endpoint-url "$EP" "$@"

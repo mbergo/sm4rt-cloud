@@ -18,6 +18,7 @@ ENV NODE_ENV=production
 COPY --from=api-deps /app/node_modules ./node_modules
 COPY api/package.json ./
 COPY api/src ./src
+COPY cli ./cli
 COPY --from=ui-build /ui/dist ./public
 EXPOSE 8080
 USER node
