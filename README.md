@@ -162,6 +162,35 @@ aws --endpoint-url https://demo.cloud.example.com s3 mb s3://data
 aws --endpoint-url https://demo.cloud.example.com dynamodb list-tables
 ```
 
+## `sm4rt` CLI
+
+A thin wrapper around the official `aws` CLI (same idea as LocalStack's
+`awslocal`) that bakes in the endpoint and test credentials, so nobody has
+to type `--endpoint-url` ever again. Every installation serves its own
+installer, pre-configured with its domain:
+
+```bash
+# from your installation (endpoint pre-configured; installs aws-cli if missing)
+curl -fsSL https://cloud.<your-domain>/cli | sh
+
+# pre-configure a specific workspace
+curl -fsSL "https://cloud.<your-domain>/cli?ws=demo" | sh
+```
+
+Then:
+
+```bash
+sm4rt s3 mb s3://data
+sm4rt sqs create-queue --queue-name jobs
+sm4rt dynamodb list-tables
+sm4rt configure          # switch workspace endpoint
+sm4rt endpoint           # print current endpoint
+```
+
+Endpoint resolution: `SM4RT_ENDPOINT` env var → `~/.config/sm4rt/endpoint`.
+Real AWS credentials in your environment are never forwarded — the wrapper
+always sends the workspace test pair. Source lives in [`cli/`](cli/).
+
 ## Configuration
 
 | Env var | Default | Purpose |
@@ -189,6 +218,7 @@ aws --endpoint-url https://demo.cloud.example.com dynamodb list-tables
 api/        Fastify control plane (drivers: swarm.ts, k8s.ts; edge: caddy.ts;
             catalog: services.ts; SSE bus: events.ts)
 ui/         React 19 + Vite + Tailwind 4 console (+ /admin)
+cli/        `sm4rt` aws-cli wrapper + installer (served at /cli)
 install/    install.sh · add-node.sh · install-k8s.sh
 charts/     Helm chart
 deploy/     Reference AKS manifests (SaaS)

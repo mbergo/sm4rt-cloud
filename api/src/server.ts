@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { verifyToken } from '@clerk/backend';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Provisioner } from './k8s.ts';
 import { isConflict, type CloudDriver, type InstanceInfo } from './driver.ts';
@@ -128,6 +128,49 @@ app.get('/api/public/config', async () => ({
   maxInstances: MAX_INSTANCES,
   maxTtlHours: MAX_TTL_HOURS,
 }));
+
+// sm4rt CLI — `curl -fsSL https://cloud.<domain>/cli | sh` installs the
+// wrapper pre-configured with this installation's endpoint scheme+domain.
+const CLI_DIR =
+  process.env.CLI_DIR ??
+  [path.resolve(import.meta.dirname, '../cli'), path.resolve(import.meta.dirname, '../../cli')].find(existsSync) ??
+  path.resolve(import.meta.dirname, '../cli');
+function cliFile(name: string): string | null {
+  const file = path.join(CLI_DIR, name);
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+app.get('/cli', async (request, reply) => {
+  const script = cliFile('install-cli.sh');
+  if (!script) return reply.code(404).send('cli installer not bundled\n');
+  const origin = `${provisioner.scheme()}://${CONSOLE_HOST}`;
+  // ?ws=<name> bakes that workspace's endpoint as the initial config
+  const { ws } = request.query as { ws?: string };
+  const endpoint = ws && isValidName(ws) ? `${provisioner.scheme()}://${ws}.${INSTANCE_DOMAIN}` : '';
+  const body = script
+    .replace(/@ENDPOINT@/g, endpoint)
+    .replace(
+      /^RAW_BASE=.*$/m,
+      `RAW_BASE="\${SM4RT_CLI_BASE:-${origin}/cli/raw}"`,
+    );
+  return reply.type('text/x-shellscript').send(body);
+});
+
+app.get('/cli/raw/sm4rt', async (_request, reply) => {
+  const script = cliFile('sm4rt');
+  if (!script) return reply.code(404).send('not found\n');
+  return reply.type('text/x-shellscript').send(script);
+});
+
+app.get('/cli/raw/install-cli.sh', async (_request, reply) => {
+  const script = cliFile('install-cli.sh');
+  if (!script) return reply.code(404).send('not found\n');
+  return reply.type('text/x-shellscript').send(script);
+});
 
 // Caddy on-demand TLS "ask" — only issue certificates for the console host
 // or subdomains of instances that actually exist.

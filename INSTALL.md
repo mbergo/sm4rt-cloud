@@ -71,7 +71,10 @@ curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add
 # verify
 open https://cloud.example.com/admin    # 4 nodes, capacity bars
 open https://cloud.example.com          # create instance "demo"
-aws --endpoint-url https://demo.cloud.example.com s3 mb s3://hello
+
+# CLI (any machine/laptop): installs `sm4rt` pre-pointed at the workspace
+curl -fsSL "https://cloud.example.com/cli?ws=demo" | sh
+sm4rt s3 mb s3://hello && sm4rt s3 ls
 ```
 
 TLS certificates are issued automatically on the first request to each
@@ -113,7 +116,8 @@ Gateway API instead of Ingress:
 | --- | --- |
 | `https://cloud.<domain>` | Console — create instances, manage AWS resources, service catalog |
 | `https://cloud.<domain>/admin` | Admin — nodes, capacity, all workspaces, add-node command |
-| `https://<instance>.<domain>` | AWS endpoint of an instance (`aws --endpoint-url …`) |
+| `https://cloud.<domain>/cli` | `sm4rt` CLI installer (`curl … | sh`), pre-configured for this installation |
+| `https://<instance>.<domain>` | AWS endpoint of an instance (`aws --endpoint-url …` or `sm4rt …`) |
 | `https://<instance>-<svc>.<domain>` | Catalog service ingress (e.g. `demo-jupyter.…`) |
 
 Credentials inside instances are the usual local pair:
