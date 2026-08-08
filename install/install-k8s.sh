@@ -14,7 +14,7 @@ command -v helm >/dev/null || die "helm is required (https://helm.sh/docs/intro/
 kubectl cluster-info >/dev/null 2>&1 || die "no reachable cluster (check kubeconfig)"
 
 bold ""
-bold "  ███████ FLOCI CLOUD — Kubernetes installer"
+bold "  ███████ SM4RT-CLOUD — Kubernetes installer"
 bold ""
 
 prompt() {

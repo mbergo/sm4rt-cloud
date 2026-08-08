@@ -16,7 +16,7 @@ die() { printf '\033[31m✘ %s\033[0m\n' "$*" >&2; exit 1; }
 command -v curl >/dev/null || die "curl is required"
 
 bold ""
-bold "  ███████ FLOCI CLOUD — self-hosted installer"
+bold "  ███████ SM4RT-CLOUD — self-hosted installer"
 bold ""
 
 # ── 1. questions ────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ done
 JOIN_CMD="$(docker swarm join-token worker -q 2>/dev/null || true)"
 
 bold ""
-bold "  ✅ FLOCI CLOUD is up"
+bold "  ✅ SM4RT-CLOUD is up"
 bold ""
 echo "  Console   ${SCHEME}://${CONSOLE_HOST}"
 echo "  Admin     ${SCHEME}://${CONSOLE_HOST}/admin   (${ADMIN_USER} / ${ADMIN_PASS})"
