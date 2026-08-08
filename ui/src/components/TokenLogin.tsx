@@ -39,7 +39,7 @@ export default function TokenLogin({ onSignedIn }: { onSignedIn: () => void }) {
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
       <div className="animate-rise-in flex flex-col items-center text-center">
         <BrandMark size="lg" />
-        <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">FLOCI CLOUD</h1>
+        <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">SM4RT-CLOUD</h1>
         <p className="mt-1.5 text-sm text-stone-400">
           Your own cloud on {config.instanceDomain} · driver: {config.driver}
         </p>

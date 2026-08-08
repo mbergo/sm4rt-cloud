@@ -19,7 +19,7 @@ export default function Header({
         <BrandMark />
         <div className="min-w-0">
           <h1 className="font-display text-lg font-bold leading-tight tracking-tight">
-            FLOCI CLOUD
+            SM4RT-CLOUD
           </h1>
           <p className="text-xs text-stone-500">
             {config.driver} · {config.instanceDomain}

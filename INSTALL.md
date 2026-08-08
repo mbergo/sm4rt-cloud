@@ -1,4 +1,4 @@
-# Installing FLOCI CLOUD
+# Installing SM4RT-CLOUD
 
 Self-hosted AWS-compatible cloud. One main machine + N workers, or a
 Kubernetes cluster. Everything real — no mocks.
