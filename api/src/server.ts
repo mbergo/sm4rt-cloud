@@ -199,16 +199,7 @@ app.get('/api/admin/overview', async () => {
     flociImage: FLOCI_IMAGE,
     nodes,
     instances,
-    capacity: {
-      cpuTotalMilli: nodes.reduce((acc, n) => acc + n.cpuTotalMilli, 0),
-      memTotalBytes: nodes.reduce((acc, n) => acc + n.memTotalBytes, 0),
-      cpuUsedMilli: nodes.some((n) => n.cpuUsedMilli !== null)
-        ? nodes.reduce((acc, n) => acc + (n.cpuUsedMilli ?? 0), 0)
-        : null,
-      memUsedBytes: nodes.some((n) => n.memUsedBytes !== null)
-        ? nodes.reduce((acc, n) => acc + (n.memUsedBytes ?? 0), 0)
-        : null,
-    },
+    capacity: aggregateCapacity(nodes),
   };
 });
 
@@ -217,6 +208,33 @@ app.get('/api/admin/nodes', async () => ({ nodes: await provisioner.nodes() }));
 app.get('/api/admin/join-command', async () => ({
   joinCommand: await provisioner.joinCommand(),
 }));
+
+// Aggregate node capacity; usage is only meaningful when every node reports it,
+// otherwise a partial sum would render as a complete (and misleadingly low) value.
+function aggregateCapacity(nodes: Awaited<ReturnType<typeof provisioner.nodes>>) {
+  return {
+    cpuTotalMilli: nodes.reduce((acc, n) => acc + n.cpuTotalMilli, 0),
+    memTotalBytes: nodes.reduce((acc, n) => acc + n.memTotalBytes, 0),
+    cpuUsedMilli:
+      nodes.length > 0 && nodes.every((n) => n.cpuUsedMilli !== null)
+        ? nodes.reduce((acc, n) => acc + (n.cpuUsedMilli ?? 0), 0)
+        : null,
+    memUsedBytes:
+      nodes.length > 0 && nodes.every((n) => n.memUsedBytes !== null)
+        ? nodes.reduce((acc, n) => acc + (n.memUsedBytes ?? 0), 0)
+        : null,
+  };
+}
+
+// Cluster foundation view for the user dashboard — read-only, no join tokens or admin data.
+app.get('/api/cluster', async () => {
+  const nodes = await provisioner.nodes();
+  return {
+    driver: provisioner.kind,
+    nodes,
+    capacity: aggregateCapacity(nodes),
+  };
+});
 
 app.get('/api/instances', async () => ({ instances: await provisioner.list() }));
 
