@@ -14,6 +14,29 @@ export interface InstanceDetail extends Instance {
   health: Record<string, unknown> | null;
 }
 
+export interface ClusterNode {
+  id: string;
+  hostname: string;
+  role: 'manager' | 'worker';
+  state: string;
+  addr: string | null;
+  cpuTotalMilli: number;
+  memTotalBytes: number;
+  cpuUsedMilli: number | null;
+  memUsedBytes: number | null;
+}
+
+export interface ClusterInfo {
+  driver: string;
+  nodes: ClusterNode[];
+  capacity: {
+    cpuTotalMilli: number;
+    memTotalBytes: number;
+    cpuUsedMilli: number | null;
+    memUsedBytes: number | null;
+  };
+}
+
 export class ApiError extends Error {
   status: number;
 
@@ -67,6 +90,10 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
 
 export function listInstances(): Promise<{ instances: Instance[] }> {
   return request('/api/instances');
+}
+
+export function getCluster(): Promise<ClusterInfo> {
+  return request('/api/cluster');
 }
 
 export function createInstance(payload: {

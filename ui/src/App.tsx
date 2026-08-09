@@ -5,11 +5,14 @@ import {
   ApiError,
   clearToken,
   deleteInstance,
+  getCluster,
   getToken as getStoredToken,
   listInstances,
   setTokenProvider,
+  type ClusterInfo,
   type Instance,
 } from './lib/api';
+import ClusterBar from './components/ClusterBar';
 import CreateModal from './components/CreateModal';
 import Console from './components/Console';
 import Header from './components/Header';
@@ -95,6 +98,7 @@ function Dashboard({
   showUserButton: boolean;
 }) {
   const [instances, setInstances] = useState<Instance[] | null>(null);
+  const [cluster, setCluster] = useState<ClusterInfo | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -119,6 +123,23 @@ function Dashboard({
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      getCluster()
+        .then((data) => {
+          if (active) setCluster(data);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   if (selected) {
     return (
@@ -161,6 +182,15 @@ function Dashboard({
         />
 
       <main className="mx-auto max-w-6xl px-6 py-8">
+        <ClusterBar cluster={cluster} />
+
+        <div className="mb-4 flex items-baseline gap-2">
+          <h2 className="font-display text-sm font-bold tracking-tight">Environments</h2>
+          <span className="text-xs text-stone-500">
+            isolated AWS workspaces running on the cluster
+          </span>
+        </div>
+
         {instances === null ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[0, 1, 2].map((index) => (
@@ -176,14 +206,14 @@ function Dashboard({
               <CloudOff className="h-6 w-6 text-stone-500" />
             </div>
             <h2 className="mt-5 font-display text-xl font-bold tracking-tight">
-              No instances yet
+              No environments yet
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-stone-400">
-              Spin up an isolated AWS environment in seconds. Each instance gets its own endpoint
-              ready for the AWS CLI, SDKs and Terraform.
+              Spin up an isolated AWS environment in seconds. Each one gets its own endpoint ready
+              for the AWS CLI, SDKs and Terraform — all running on the cluster above.
             </p>
             <PrimaryButton onClick={() => setCreateOpen(true)} className="mt-6">
-              Create your first instance
+              Create your first environment
             </PrimaryButton>
           </div>
         ) : (

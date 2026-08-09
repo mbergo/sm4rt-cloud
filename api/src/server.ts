@@ -218,6 +218,25 @@ app.get('/api/admin/join-command', async () => ({
   joinCommand: await provisioner.joinCommand(),
 }));
 
+// Cluster foundation view for the user dashboard — read-only, no join tokens or admin data.
+app.get('/api/cluster', async () => {
+  const nodes = await provisioner.nodes();
+  return {
+    driver: provisioner.kind,
+    nodes,
+    capacity: {
+      cpuTotalMilli: nodes.reduce((acc, n) => acc + n.cpuTotalMilli, 0),
+      memTotalBytes: nodes.reduce((acc, n) => acc + n.memTotalBytes, 0),
+      cpuUsedMilli: nodes.some((n) => n.cpuUsedMilli !== null)
+        ? nodes.reduce((acc, n) => acc + (n.cpuUsedMilli ?? 0), 0)
+        : null,
+      memUsedBytes: nodes.some((n) => n.memUsedBytes !== null)
+        ? nodes.reduce((acc, n) => acc + (n.memUsedBytes ?? 0), 0)
+        : null,
+    },
+  };
+});
+
 app.get('/api/instances', async () => ({ instances: await provisioner.list() }));
 
 interface CreateBody {
