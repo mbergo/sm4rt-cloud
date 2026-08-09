@@ -23,18 +23,25 @@ That's it. No cloud account, no external services.
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 ```
 
-The wizard asks for: domain, whether to enable HTTPS (Caddy issues and
-renews certificates automatically — no separate Let's Encrypt setup),
-an optional ACME email, admin user/pass, console token. It then installs
+The wizard asks for: this machine's IP (the cluster advertise address),
+domain, **worker machines to join right away** (SSH targets — leave empty
+for a single machine), whether to enable HTTPS (Caddy issues and renews
+certificates automatically — no separate Let's Encrypt setup), an
+optional ACME email, admin user/pass, console token. It shows the full
+plan and asks for confirmation before touching anything, then installs
 Docker, initializes Swarm, starts Caddy (edge + on-demand TLS) and the
-floci-cloud console.
+floci-cloud console — and finally SSHes into each worker to join it to
+the cluster (a worker that fails just prints a warning; retry later with
+`add-node.sh`).
 
 At the end it prints the console URL, admin URL and access token.
 
-Non-interactive:
+Non-interactive (any answer can be pre-set as an env var; unset ones use
+defaults):
 
 ```bash
-sudo INSTANCE_DOMAIN=cloud.example.com ENABLE_TLS=yes bash install.sh
+sudo INSTANCE_DOMAIN=cloud.example.com ENABLE_TLS=yes \
+     CLUSTER_NODES="ubuntu@10.0.0.12 ubuntu@10.0.0.13" bash install.sh
 ```
 
 Private images (e.g. private GHCR): pass registry credentials — the
@@ -47,7 +54,9 @@ sudo REGISTRY_USER=you REGISTRY_PASS=ghp_xxx bash install.sh
 
 ### 2. Add workers (~1 min each)
 
-From the main machine, with SSH key access to the workers:
+The wizard already offers to join workers during install ("Worker
+machines to join now"). To add more later, from the main machine with
+SSH key access to the workers:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh
@@ -62,11 +71,12 @@ admin page and run it manually on any machine.
 ### 3. Demo flow (4 machines)
 
 ```bash
-# machine 1 (main)
+# machine 1 (main) — the wizard asks for domain + workers and joins machines 2-4
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
-                                        # → console + admin live
+#   Worker machines to join now []: user@m2 user@m3 user@m4
+#                                           # → console + admin live, 4-node cluster
 
-# still on machine 1: join machines 2-4
+# (workers can also be joined later:)
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh && chmod +x add-node.sh
 ./add-node.sh user@m2 user@m3 user@m4
 
