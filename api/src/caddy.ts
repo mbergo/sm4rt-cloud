@@ -86,7 +86,13 @@ export function buildCaddyConfig(opts: CaddyOptions): object {
   }
 
   return {
-    admin: { listen: '0.0.0.0:2019' },
+    // Caddy enforces admin origin (Host header) checks even on wildcard
+    // listeners — allow the swarm service name so /load pushes keep working
+    // after this config replaces the bootstrap one.
+    admin: {
+      listen: '0.0.0.0:2019',
+      origins: ['caddy:2019', 'localhost:2019', '127.0.0.1:2019'],
+    },
     apps: {
       http: {
         servers: {
@@ -131,7 +137,9 @@ export async function pushCaddyConfig(
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        // Node's fetch (undici) sends an empty Origin on POST, which Caddy's
+        // admin origin check rejects — send one matching the admin URL.
+        headers: { 'content-type': 'application/json', origin: new URL(adminUrl).origin },
         body: JSON.stringify(config),
         signal: AbortSignal.timeout(5000),
       });

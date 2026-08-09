@@ -168,11 +168,22 @@ docker network inspect floci-net >/dev/null 2>&1 || \
 ok "overlay network floci-net"
 
 # ── 4. caddy (edge proxy + on-demand TLS) ───────────────────────────────────
-BOOTSTRAP='{"admin":{"listen":"0.0.0.0:2019"}}'
+# origins: Caddy validates the Host header on admin requests even with a
+# wildcard listener; allow the overlay service name so floci-cloud can push
+# config to http://caddy:2019.
+BOOTSTRAP='{"admin":{"listen":"0.0.0.0:2019","origins":["caddy:2019","localhost:2019","127.0.0.1:2019"]}}'
+BOOTSTRAP_B64="$(printf '%s' "$BOOTSTRAP" | base64 | tr -d '\n')"
+CURRENT_B64="$(docker config inspect caddy-bootstrap --format '{{json .Spec.Data}}' 2>/dev/null | tr -d '"' || true)"
+if [ -n "$CURRENT_B64" ] && [ "$CURRENT_B64" != "$BOOTSTRAP_B64" ]; then
+  warn "caddy bootstrap changed — recreating caddy service"
+  docker service rm caddy >/dev/null 2>&1 || true
+  docker config rm caddy-bootstrap >/dev/null 2>&1 || true
+fi
 if ! docker config inspect caddy-bootstrap >/dev/null 2>&1; then
   printf '%s' "$BOOTSTRAP" | docker config create caddy-bootstrap - >/dev/null
 fi
 docker volume create caddy-data >/dev/null 2>&1 || true
+docker volume create caddy-config >/dev/null 2>&1 || true
 if ! docker service inspect caddy >/dev/null 2>&1; then
   docker service create --name caddy \
     --network floci-net \
@@ -180,9 +191,10 @@ if ! docker service inspect caddy >/dev/null 2>&1; then
     --publish published=80,target=80,mode=host \
     --publish published=443,target=443,mode=host \
     --mount type=volume,source=caddy-data,target=/data \
+    --mount type=volume,source=caddy-config,target=/config \
     --config source=caddy-bootstrap,target=/etc/caddy/bootstrap.json \
     --restart-condition any \
-    caddy:2 caddy run --config /etc/caddy/bootstrap.json >/dev/null
+    caddy:2 caddy run --config /etc/caddy/bootstrap.json --resume >/dev/null
 fi
 ok "caddy running (ports 80/443, admin on overlay :2019)"
 
@@ -199,10 +211,13 @@ docker pull "$FLOCI_IMAGE" >/dev/null && ok "pulled $FLOCI_IMAGE" || warn "could
 if docker service inspect floci-cloud >/dev/null 2>&1; then
   docker service rm floci-cloud >/dev/null
 fi
+# container runs as non-root (USER node) — grant it the docker.sock group
+DOCKER_SOCK_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
 docker service create --name floci-cloud \
   --network floci-net \
   --constraint node.role==manager \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
+  --group "$DOCKER_SOCK_GID" \
   --env DRIVER=swarm \
   --env INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
   --env CONSOLE_HOST="$CONSOLE_HOST" \
