@@ -181,7 +181,7 @@ CADDY_BASE="{
 }"
 if [ -n "$ACME_EMAIL" ]; then
   CADDY_BASE="{
-    email ${ACME_EMAIL}
+    email \"${ACME_EMAIL}\"
     on_demand_tls {
         ask http://floci-cloud:8080/api/public/tls-ask
     }
@@ -189,7 +189,9 @@ if [ -n "$ACME_EMAIL" ]; then
 fi
 
 # recreate caddy when the image changes — this also migrates installs from
-# the old push-based caddy:2 setup (admin API + bootstrap config)
+# the old push-based caddy:2 setup (admin API + bootstrap config).
+# NOTE: services created before this migration carry no caddy.* labels, so
+# the proxy won't route to them — recreate workspaces after upgrading.
 OLD_CADDY_IMAGE="$(docker service inspect caddy --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
 if [ -n "$OLD_CADDY_IMAGE" ] && [ "${OLD_CADDY_IMAGE%%@*}" != "$CADDY_IMAGE" ]; then
   warn "caddy image changed (${OLD_CADDY_IMAGE%%@*} -> ${CADDY_IMAGE}) — recreating"
@@ -202,7 +204,13 @@ CURRENT_B64="$(docker config inspect caddy-base --format '{{json .Spec.Data}}' 2
 if [ -n "$CURRENT_B64" ] && [ "$CURRENT_B64" != "$CADDY_BASE_B64" ]; then
   warn "caddy base config changed — recreating caddy service"
   docker service rm caddy >/dev/null 2>&1 || true
-  docker config rm caddy-base >/dev/null 2>&1 || true
+  # service rm releases its config reference asynchronously — retry until
+  # removable, and fail loudly rather than deploying with a stale config
+  for i in $(seq 1 30); do
+    docker config rm caddy-base >/dev/null 2>&1 && break
+    [ "$i" -eq 30 ] && die "could not remove docker config caddy-base (still in use)"
+    sleep 2
+  done
 fi
 if ! docker config inspect caddy-base >/dev/null 2>&1; then
   printf '%s' "$CADDY_BASE" | docker config create caddy-base - >/dev/null
