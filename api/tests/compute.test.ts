@@ -171,6 +171,8 @@ test('cdnVcl sets backend, ttl and cache headers', () => {
   assert.match(vcl, /\.port = "8080"/);
   assert.match(vcl, /req\.http\.Host = "example\.com"/);
   assert.match(vcl, /beresp\.ttl = 120s/);
+  assert.match(vcl, /beresp\.uncacheable = false/);
+  assert.match(vcl, /unset beresp\.http\.Cache-Control/);
   assert.match(vcl, /X-Cache/);
   assert.match(vcl, /X-Sm4rt-CDN/);
 });

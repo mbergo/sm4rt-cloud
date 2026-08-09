@@ -257,8 +257,16 @@ sub vcl_recv {
 }
 
 sub vcl_backend_response {
+  # Force-cache with the distribution TTL even when the origin sends
+  # no-cache / no-store (builtin VCL would mark those uncacheable).
   set beresp.ttl = ${Math.floor(ttlSeconds)}s;
   unset beresp.http.Set-Cookie;
+  unset beresp.http.Cache-Control;
+  unset beresp.http.Expires;
+  if (beresp.status < 400) {
+    set beresp.uncacheable = false;
+    return (deliver);
+  }
 }
 
 sub vcl_deliver {
