@@ -168,19 +168,52 @@ docker network inspect floci-net >/dev/null 2>&1 || \
 ok "overlay network floci-net"
 
 # ── 4. caddy (edge proxy + on-demand TLS) ───────────────────────────────────
-# origins: Caddy validates the Host header on admin requests even with a
-# wildcard listener; allow the overlay service name so floci-cloud can push
-# config to http://caddy:2019.
-BOOTSTRAP='{"admin":{"listen":"0.0.0.0:2019","origins":["caddy:2019","localhost:2019","127.0.0.1:2019"]}}'
-BOOTSTRAP_B64="$(printf '%s' "$BOOTSTRAP" | base64 | tr -d '\n')"
-CURRENT_B64="$(docker config inspect caddy-bootstrap --format '{{json .Spec.Data}}' 2>/dev/null | tr -d '"' || true)"
-if [ -n "$CURRENT_B64" ] && [ "$CURRENT_B64" != "$BOOTSTRAP_B64" ]; then
-  warn "caddy bootstrap changed — recreating caddy service"
-  docker service rm caddy >/dev/null 2>&1 || true
-  docker config rm caddy-bootstrap >/dev/null 2>&1 || true
+# caddy-docker-proxy: every swarm service declares its routes via caddy.*
+# labels and the proxy rebuilds its Caddyfile from them. Fully declarative —
+# no admin-API pushes, no config to lose on restart.
+CADDY_IMAGE="lucaslorentz/caddy-docker-proxy:2.13.1-alpine"
+
+# base Caddyfile (global options): on-demand TLS stays gated by the console
+CADDY_BASE="{
+    on_demand_tls {
+        ask http://floci-cloud:8080/api/public/tls-ask
+    }
+}"
+if [ -n "$ACME_EMAIL" ]; then
+  CADDY_BASE="{
+    email \"${ACME_EMAIL}\"
+    on_demand_tls {
+        ask http://floci-cloud:8080/api/public/tls-ask
+    }
+}"
 fi
-if ! docker config inspect caddy-bootstrap >/dev/null 2>&1; then
-  printf '%s' "$BOOTSTRAP" | docker config create caddy-bootstrap - >/dev/null
+
+# recreate caddy when the image changes — this also migrates installs from
+# the old push-based caddy:2 setup (admin API + bootstrap config).
+# NOTE: services created before this migration carry no caddy.* labels, so
+# the proxy won't route to them — recreate workspaces after upgrading.
+OLD_CADDY_IMAGE="$(docker service inspect caddy --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)"
+if [ -n "$OLD_CADDY_IMAGE" ] && [ "${OLD_CADDY_IMAGE%%@*}" != "$CADDY_IMAGE" ]; then
+  warn "caddy image changed (${OLD_CADDY_IMAGE%%@*} -> ${CADDY_IMAGE}) — recreating"
+  docker service rm caddy >/dev/null 2>&1 || true
+fi
+docker config rm caddy-bootstrap >/dev/null 2>&1 || true
+
+CADDY_BASE_B64="$(printf '%s' "$CADDY_BASE" | base64 | tr -d '\n')"
+CURRENT_B64="$(docker config inspect caddy-base --format '{{json .Spec.Data}}' 2>/dev/null | tr -d '"' || true)"
+if [ -n "$CURRENT_B64" ] && [ "$CURRENT_B64" != "$CADDY_BASE_B64" ]; then
+  warn "caddy base config changed — recreating caddy service"
+  docker service rm caddy >/dev/null 2>&1 || true
+  # service rm releases its config reference asynchronously — retry until
+  # removable, and fail loudly rather than deploying with a stale config
+  for i in $(seq 1 30); do
+    docker config rm caddy-base >/dev/null 2>&1 && break
+    [ "$i" -eq 30 ] && die "could not remove docker config caddy-base (still in use)"
+    sleep 2
+  done
+fi
+if ! docker config inspect caddy-base >/dev/null 2>&1; then
+  printf '%s' "$CADDY_BASE" | docker config create caddy-base - >/dev/null
 fi
 docker volume create caddy-data >/dev/null 2>&1 || true
 docker volume create caddy-config >/dev/null 2>&1 || true
@@ -190,13 +223,17 @@ if ! docker service inspect caddy >/dev/null 2>&1; then
     --constraint node.role==manager \
     --publish published=80,target=80,mode=host \
     --publish published=443,target=443,mode=host \
+    --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,ro \
     --mount type=volume,source=caddy-data,target=/data \
     --mount type=volume,source=caddy-config,target=/config \
-    --config source=caddy-bootstrap,target=/etc/caddy/bootstrap.json \
+    --config source=caddy-base,target=/dynamic/Caddyfile \
+    --env CADDY_INGRESS_NETWORKS=floci-net \
+    --env CADDY_DOCKER_CADDYFILE_PATH=/dynamic/Caddyfile \
+    --env CADDY_DOCKER_POLLING_INTERVAL=5s \
     --restart-condition any \
-    caddy:2 caddy run --config /etc/caddy/bootstrap.json --resume >/dev/null
+    "$CADDY_IMAGE" >/dev/null
 fi
-ok "caddy running (ports 80/443, admin on overlay :2019)"
+ok "caddy running (caddy-docker-proxy, ports 80/443)"
 
 # ── 5. floci images ─────────────────────────────────────────────────────────
 if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASS" ]; then
@@ -213,11 +250,22 @@ if docker service inspect floci-cloud >/dev/null 2>&1; then
 fi
 # container runs as non-root (USER node) — grant it the docker.sock group
 DOCKER_SOCK_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
+# console vhost: caddy-docker-proxy builds the route from these labels
+if [ "$INSTANCE_TLS" = "true" ]; then
+  CONSOLE_SITE="$CONSOLE_HOST"
+  CONSOLE_TLS_LABEL='caddy.tls.on_demand={{""}}'
+else
+  CONSOLE_SITE="http://$CONSOLE_HOST"
+  CONSOLE_TLS_LABEL=""
+fi
 docker service create --name floci-cloud \
   --network floci-net \
   --constraint node.role==manager \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
   --group "$DOCKER_SOCK_GID" \
+  --label caddy="$CONSOLE_SITE" \
+  --label caddy.reverse_proxy='{{upstreams 8080}}' \
+  ${CONSOLE_TLS_LABEL:+--label "$CONSOLE_TLS_LABEL"} \
   --env DRIVER=swarm \
   --env INSTANCE_DOMAIN="$INSTANCE_DOMAIN" \
   --env CONSOLE_HOST="$CONSOLE_HOST" \
@@ -226,9 +274,6 @@ docker service create --name floci-cloud \
   --env FLOCI_CLOUD_TOKEN="$CLOUD_TOKEN" \
   --env ADMIN_USER="$ADMIN_USER" \
   --env ADMIN_PASS="$ADMIN_PASS" \
-  --env CADDY_ADMIN_URL=http://caddy:2019 \
-  --env SELF_UPSTREAM=floci-cloud:8080 \
-  ${ACME_EMAIL:+--env ACME_EMAIL="$ACME_EMAIL"} \
   ${REGISTRY_USER:+--env REGISTRY_USER="$REGISTRY_USER"} \
   ${REGISTRY_PASS:+--env REGISTRY_PASS="$REGISTRY_PASS"} \
   ${REGISTRY_USER:+--env REGISTRY_SERVER="$REGISTRY_SERVER"} \

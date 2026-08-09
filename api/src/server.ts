@@ -9,7 +9,7 @@ import { isValidName, randomName } from './names.ts';
 import { ResourceGateway, isServiceId } from './resources.ts';
 import { EXPLORER_SERVICES, explore } from './explorer.ts';
 import { isRealServiceId } from './services.ts';
-import { buildCaddyConfig, parseTlsAsk, pushCaddyConfig } from './caddy.ts';
+import { parseTlsAsk } from './caddy.ts';
 import { emit, subscribe } from './events.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -27,10 +27,7 @@ const DRIVER = process.env.DRIVER ?? 'kubernetes';
 const ADMIN_USER = process.env.ADMIN_USER ?? 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS ?? 'floci-admin';
 const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY ?? '';
-const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL ?? '';
 const CONSOLE_HOST = process.env.CONSOLE_HOST ?? `cloud.${INSTANCE_DOMAIN}`;
-const SELF_UPSTREAM = process.env.SELF_UPSTREAM ?? 'floci-cloud:8080';
-const ACME_EMAIL = process.env.ACME_EMAIL ?? '';
 const PUBLIC_DIR = process.env.PUBLIC_DIR ?? path.resolve(import.meta.dirname, '../public');
 const MAX_TTL_HOURS = 7 * 24;
 const MAX_INSTANCES = Number(process.env.MAX_INSTANCES ?? 20);
@@ -694,23 +691,6 @@ setInterval(() => {
     })
     .catch((err) => app.log.error(err, 'instance reaper failed'));
 }, 60_000);
-
-if (CADDY_ADMIN_URL) {
-  const caddyConfig = buildCaddyConfig({
-    instanceDomain: INSTANCE_DOMAIN,
-    consoleHost: CONSOLE_HOST,
-    selfUpstream: SELF_UPSTREAM,
-    ...(ACME_EMAIL ? { acmeEmail: ACME_EMAIL } : {}),
-    ...(process.env.ACME_STAGING === 'true' ? { acmeStaging: true } : {}),
-  });
-  // fire and forget — retries internally while Caddy boots
-  void pushCaddyConfig(CADDY_ADMIN_URL, caddyConfig, app.log);
-  // reconcile loop: Caddy restarts lose in-memory config (bootstrap has no
-  // routes), so re-push periodically. Identical configs are a no-op in Caddy.
-  setInterval(() => {
-    void pushCaddyConfig(CADDY_ADMIN_URL, caddyConfig, app.log);
-  }, 60_000);
-}
 
 app.listen({ port: PORT, host: HOST }).catch((err) => {
   app.log.error(err);

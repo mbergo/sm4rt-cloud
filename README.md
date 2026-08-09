@@ -202,8 +202,7 @@ always sends the workspace test pair. Source lives in [`cli/`](cli/).
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `floci-admin` | Admin area (Basic auth) |
 | `FLOCI_IMAGE` | `floci/floci:latest` | Engine image |
 | `INSTANCE_TLS` | `false` | HTTPS for workspace endpoints |
-| `ACME_EMAIL` | _(unset)_ | Optional ACME account email for expiry notices (swarm/Caddy) |
-| `CADDY_ADMIN_URL` | _(unset)_ | Caddy admin API (swarm edge) |
+| `ACME_EMAIL` | _(unset)_ | Optional ACME account email (installer → Caddy base config) |
 | `REGISTRY_USER/PASS/SERVER` | _(unset)_ / `ghcr.io` | Pull private images on all nodes (swarm) |
 | `INGRESS_CLASS` | `nginx` | k8s ingress mode |
 | `GATEWAY_NAME` / `GATEWAY_NAMESPACE` | _(unset)_ | k8s Gateway API mode (Envoy) |
@@ -215,7 +214,7 @@ always sends the workspace test pair. Source lives in [`cli/`](cli/).
 ## Repository layout
 
 ```
-api/        Fastify control plane (drivers: swarm.ts, k8s.ts; edge: caddy.ts;
+api/        Fastify control plane (drivers: swarm.ts, k8s.ts; tls-ask: caddy.ts;
             catalog: services.ts; SSE bus: events.ts)
 ui/         React 19 + Vite + Tailwind 4 console (+ /admin)
 cli/        `sm4rt` aws-cli wrapper + installer (served at /cli)

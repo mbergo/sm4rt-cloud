@@ -173,6 +173,23 @@ export class SwarmDriver implements CloudDriver {
     return `${SERVICE_PREFIX}${name}-svc-${service}`;
   }
 
+  /**
+   * caddy-docker-proxy routing labels. The edge proxy watches swarm services
+   * and rebuilds its Caddyfile from these — service labels are the single
+   * source of truth, no admin-API pushes. With TLS, `tls.on_demand` keeps
+   * certificate issuance gated by our /api/public/tls-ask endpoint.
+   */
+  private caddyLabels(host: string, port: number): Record<string, string> {
+    const labels: Record<string, string> = {
+      caddy: this.opts.tls ? host : `http://${host}`,
+      'caddy.reverse_proxy': `{{upstreams ${port}}}`,
+    };
+    if (this.opts.tls) {
+      labels['caddy.tls.on_demand'] = '';
+    }
+    return labels;
+  }
+
   private async ensureNetwork(): Promise<void> {
     if (this.networkReady) {
       return;
@@ -321,6 +338,7 @@ export class SwarmDriver implements CloudDriver {
       [MANAGED_LABEL]: MANAGED_BY,
       [INSTANCE_LABEL]: name,
       [CREATED_LABEL]: now.toISOString(),
+      ...this.caddyLabels(this.hostFor(name), 4566),
     };
     if (ttlHours && ttlHours > 0) {
       labels[EXPIRES_LABEL] = new Date(now.getTime() + ttlHours * 3600_000).toISOString();
@@ -591,9 +609,14 @@ export class SwarmDriver implements CloudDriver {
       [INSTANCE_LABEL]: name,
       [SERVICE_LABEL]: service,
     };
+    // caddy labels go on the service spec only (not the container) — the
+    // proxy scans both, and duplicates would generate conflicting sites
+    const serviceLabels: Record<string, string> = spec.httpIngressPort
+      ? { ...labels, ...this.caddyLabels(externalHost, spec.httpIngressPort) }
+      : labels;
     await this.createSwarmService({
       Name: this.catalogServiceName(name, service),
-      Labels: labels,
+      Labels: serviceLabels,
       TaskTemplate: {
         ContainerSpec: {
           Image: spec.image,
