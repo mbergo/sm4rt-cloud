@@ -705,6 +705,11 @@ if (CADDY_ADMIN_URL) {
   });
   // fire and forget — retries internally while Caddy boots
   void pushCaddyConfig(CADDY_ADMIN_URL, caddyConfig, app.log);
+  // reconcile loop: Caddy restarts lose in-memory config (bootstrap has no
+  // routes), so re-push periodically. Identical configs are a no-op in Caddy.
+  setInterval(() => {
+    void pushCaddyConfig(CADDY_ADMIN_URL, caddyConfig, app.log);
+  }, 60_000);
 }
 
 app.listen({ port: PORT, host: HOST }).catch((err) => {
