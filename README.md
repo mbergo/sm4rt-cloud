@@ -93,11 +93,13 @@ Main machine:
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 ```
 
-The wizard asks for domain, Let's Encrypt email, admin credentials and images,
-then installs Docker, initializes the cluster, starts the edge proxy and the
-console. At the end it prints the console URL, admin URL and access token.
+The wizard asks for domain, the worker machines to join (SSH targets, optional),
+Let's Encrypt email, admin credentials and images, shows the plan for
+confirmation, then installs Docker, initializes the cluster, joins the workers,
+starts the edge proxy and the console. At the end it prints the console URL,
+admin URL and access token.
 
-Add capacity (from the main machine, with SSH access to the others):
+Add capacity later (from the main machine, with SSH access to the others):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/add-node.sh -o add-node.sh

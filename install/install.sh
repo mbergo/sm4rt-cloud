@@ -28,15 +28,23 @@ prompt() { # var, question, default
   # piped install (curl | bash): stdin is not a TTY, read from /dev/tty
   if [ -t 0 ]; then
     read -r -p "$q [$def]: " answer || true
-  elif [ -r /dev/tty ]; then
+  elif [ "$HAVE_TTY" = yes ]; then
     read -r -p "$q [$def]: " answer < /dev/tty || true
   else
     answer=""
   fi
   printf -v "$var" '%s' "${answer:-$def}"
 }
+# can we actually open the controlling terminal? ([ -r /dev/tty ] is not enough)
+if { : < /dev/tty; } 2>/dev/null; then HAVE_TTY=yes; else HAVE_TTY=no; fi
+if [ ! -t 0 ] && [ "$HAVE_TTY" = no ]; then
+  bold "  (no terminal detected — using environment variables / defaults)"
+fi
 
-prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $DEFAULT_IP)" "cloud.local"
+prompt ADVERTISE_IP    "This machine's IP (cluster advertise address)" "$DEFAULT_IP"
+prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $ADVERTISE_IP)" "cloud.local"
+prompt CLUSTER_NODES   "Worker machines to join now (SSH targets, e.g. ubuntu@10.0.0.12 ubuntu@10.0.0.13 — empty = manager only)" ""
+CLUSTER_NODES="$(printf '%s' "$CLUSTER_NODES" | tr ',' ' ')"
 
 # Caddy handles certificates automatically (ACME). HTTPS is on by default for
 # real domains; local/test domains (cloud.local, *.sslip.io, …) default to HTTP.
@@ -68,6 +76,9 @@ case "$ENABLE_TLS" in
   *)          INSTANCE_TLS=false; SCHEME=http ;;
 esac
 
+NODE_COUNT=1
+for _n in $CLUSTER_NODES; do NODE_COUNT=$((NODE_COUNT + 1)); done
+
 bold ""
 bold "  Plan"
 echo "    domain        *.${INSTANCE_DOMAIN}"
@@ -75,7 +86,19 @@ echo "    console       ${SCHEME}://${CONSOLE_HOST}"
 echo "    admin         ${SCHEME}://${CONSOLE_HOST}/admin  (${ADMIN_USER})"
 echo "    tls           ${INSTANCE_TLS} (automatic via Caddy${ACME_EMAIL:+, account $ACME_EMAIL})"
 echo "    driver        docker swarm"
+echo "    manager       ${ADVERTISE_IP}"
+if [ -n "$CLUSTER_NODES" ]; then
+  echo "    cluster       ${NODE_COUNT} machines (manager + workers: ${CLUSTER_NODES})"
+else
+  echo "    cluster       manager only (add workers later with add-node.sh)"
+fi
 bold ""
+
+prompt CONFIRM "Proceed with this plan? (yes/no)" "yes"
+case "$CONFIRM" in
+  [Yy]*) ;;
+  *) die "aborted — rerun the installer to change answers" ;;
+esac
 
 # ── 2. preflight + dependencies ─────────────────────────────────────────────
 OS_TYPE="$(grep -w ID /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
@@ -159,9 +182,9 @@ ok "docker $(docker --version | awk '{print $3}' | tr -d ',')"
 SWARM_STATE="$(docker info --format '{{.Swarm.LocalNodeState}}')"
 if [ "$SWARM_STATE" != "active" ]; then
   bold "Initializing Docker Swarm…"
-  docker swarm init --advertise-addr "$DEFAULT_IP" >/dev/null
+  docker swarm init --advertise-addr "$ADVERTISE_IP" >/dev/null
 fi
-ok "swarm active (manager: $DEFAULT_IP)"
+ok "swarm active (manager: $ADVERTISE_IP)"
 
 docker network inspect floci-net >/dev/null 2>&1 || \
   docker network create --driver overlay --attachable floci-net >/dev/null
@@ -294,6 +317,50 @@ for i in $(seq 1 60); do
   sleep 3
 done
 
+# ── 8. join worker machines (if any) ────────────────────────────────────────
+# Same logic as add-node.sh: SSH into each box, install Docker if missing,
+# join the swarm. Requires SSH key access from this machine.
+# The installer runs as root but SSH keys usually belong to the sudo caller —
+# run ssh as that user when available.
+run_ssh() {
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    sudo -u "$SUDO_USER" ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$@"
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$@"
+  fi
+}
+JOINED_NODES=""; FAILED_NODES=""
+if [ -n "$CLUSTER_NODES" ]; then
+  bold "Joining worker machines…"
+  WORKER_TOKEN="$(docker swarm join-token worker -q)"
+  MANAGER_ADDR="$(docker info --format '{{.Swarm.NodeAddr}}')"
+  for target in $CLUSTER_NODES; do
+    bold "→ $target"
+    # shellcheck disable=SC2087  # WORKER_TOKEN/MANAGER_ADDR expand client-side by design
+    if run_ssh "$target" bash -s <<REMOTE
+set -euo pipefail
+if ! command -v docker >/dev/null; then
+  echo "  installing docker…"
+  curl -fsSL https://get.docker.com | sudo sh
+fi
+STATE="\$(sudo docker info --format '{{.Swarm.LocalNodeState}}')"
+if [ "\$STATE" = "active" ]; then
+  echo "  already in a swarm — skipping join"
+else
+  sudo docker swarm join --token ${WORKER_TOKEN} ${MANAGER_ADDR}:2377
+fi
+REMOTE
+    then
+      ok "$target joined"
+      JOINED_NODES="${JOINED_NODES} ${target}"
+    else
+      warn "$target failed — join it later: ./add-node.sh $target"
+      FAILED_NODES="${FAILED_NODES} ${target}"
+    fi
+  done
+  docker node ls
+fi
+
 JOIN_CMD="$(docker swarm join-token worker -q 2>/dev/null || true)"
 
 bold ""
@@ -303,9 +370,15 @@ echo "  Console   ${SCHEME}://${CONSOLE_HOST}"
 echo "  Admin     ${SCHEME}://${CONSOLE_HOST}/admin   (${ADMIN_USER} / ${ADMIN_PASS})"
 echo "  Token     ${CLOUD_TOKEN}"
 echo ""
-echo "  DNS       point *.${INSTANCE_DOMAIN} at ${DEFAULT_IP} (one wildcard A record)"
+echo "  DNS       point *.${INSTANCE_DOMAIN} at ${ADVERTISE_IP} (one wildcard A record)"
+if [ -n "$JOINED_NODES" ]; then
+  echo "  Cluster   manager +${JOINED_NODES}"
+fi
+if [ -n "$FAILED_NODES" ]; then
+  warn "these machines did not join:${FAILED_NODES} — retry with ./add-node.sh"
+fi
 if [ -n "$JOIN_CMD" ]; then
   echo "  Add node  ./add-node.sh ubuntu@WORKER_IP    (or on the worker:)"
-  echo "            docker swarm join --token ${JOIN_CMD} ${DEFAULT_IP}:2377"
+  echo "            docker swarm join --token ${JOIN_CMD} ${ADVERTISE_IP}:2377"
 fi
 echo ""
