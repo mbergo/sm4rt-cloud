@@ -73,7 +73,9 @@ export async function request<T>(path: string, init?: RequestInit, token?: strin
   const response = await fetch(path, {
     ...init,
     headers: {
-      'content-type': 'application/json',
+      // Only claim a JSON body when one is actually sent — Fastify rejects
+      // content-type: application/json with an empty body (400).
+      ...(init?.body != null ? { 'content-type': 'application/json' } : {}),
       authorization: `Bearer ${bearer}`,
       ...init?.headers,
     },
