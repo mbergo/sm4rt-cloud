@@ -1,0 +1,313 @@
+/**
+ * sm4rt compute client — real workloads (VMs, containers, databases, caches,
+ * DNS, gateways, CDN, observability, DevOps) under /api/instances/:ws/compute.
+ */
+import { request } from './api';
+
+// — Catalog constants (mirrors api/src/compute-templates.ts) —
+
+export const VM_IMAGES = [
+  { id: 'ubuntu-24', label: 'Ubuntu 24.04 LTS' },
+  { id: 'debian-12', label: 'Debian 12 (bookworm)' },
+  { id: 'alpine-3', label: 'Alpine 3.20' },
+] as const;
+export type VmImageId = (typeof VM_IMAGES)[number]['id'];
+
+export const VM_PLANS = [
+  { id: 'nano', label: 'Nano — 0.5 vCPU · 512 MB' },
+  { id: 'small', label: 'Small — 1 vCPU · 1 GB' },
+  { id: 'medium', label: 'Medium — 2 vCPU · 2 GB' },
+  { id: 'large', label: 'Large — 4 vCPU · 4 GB' },
+] as const;
+export type VmPlanId = (typeof VM_PLANS)[number]['id'];
+
+export const DB_ENGINES = [
+  { id: 'postgres-16', label: 'PostgreSQL 16', port: 5432 },
+  { id: 'mysql-8', label: 'MySQL 8', port: 3306 },
+  { id: 'mariadb-11', label: 'MariaDB 11', port: 3306 },
+] as const;
+export type DbEngineId = (typeof DB_ENGINES)[number]['id'];
+
+export const CACHE_ENGINES = [
+  { id: 'redis-7', label: 'Redis 7' },
+  { id: 'valkey-8', label: 'Valkey 8' },
+] as const;
+export type CacheEngineId = (typeof CACHE_ENGINES)[number]['id'];
+
+export const DNS_TYPES = ['ALIAS', 'A', 'CNAME', 'TXT', 'MX'] as const;
+export type DnsType = (typeof DNS_TYPES)[number];
+
+// — Shapes (mirror api/src/compute.ts + devops.ts) —
+
+export interface VmInfo {
+  id: string;
+  name: string;
+  image: VmImageId;
+  imageLabel: string;
+  plan: VmPlanId;
+  planLabel: string;
+  state: string;
+  desiredReplicas: number;
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  sshPassword: string;
+  sshCommand: string;
+  createdAt: string | null;
+}
+
+export interface TaskInfo {
+  name: string;
+  image: string;
+  port: number | null;
+  replicas: number;
+  runningReplicas: number;
+  state: string;
+  url: string | null;
+  env: Record<string, string>;
+  metricsPort: number | null;
+  metricsPath: string;
+  gitopsApp: string | null;
+  gitopsRev: string | null;
+  createdAt: string | null;
+}
+
+export interface DbInfo {
+  name: string;
+  engine: DbEngineId;
+  engineLabel: string;
+  state: string;
+  host: string;
+  port: number;
+  externalPort: number | null;
+  externalHost: string | null;
+  user: string;
+  password: string;
+  database: string;
+  connectionUri: string;
+  createdAt: string | null;
+}
+
+export interface CacheInfo {
+  name: string;
+  engine: CacheEngineId;
+  engineLabel: string;
+  state: string;
+  host: string;
+  port: number;
+  externalPort: number | null;
+  externalHost: string | null;
+  password: string;
+  connectionUri: string;
+  createdAt: string | null;
+}
+
+export interface GatewayRoute {
+  path: string;
+  target: string;
+}
+
+export interface GatewayInfo {
+  name: string;
+  state: string;
+  url: string;
+  routes: GatewayRoute[];
+  createdAt: string | null;
+}
+
+export interface CdnInfo {
+  name: string;
+  state: string;
+  url: string;
+  origin: string;
+  ttlSeconds: number;
+  memory: string;
+  createdAt: string | null;
+}
+
+export interface DnsRecord {
+  record: string;
+  fqdn: string;
+  type: DnsType;
+  target: string;
+  informational: boolean;
+}
+
+export interface ScrapeTarget {
+  taskName: string;
+  serviceHost: string;
+  port: number;
+  path: string;
+}
+
+export interface ObsInfo {
+  state: string;
+  grafanaUrl: string;
+  grafanaUser: string;
+  grafanaPassword: string;
+  otlpUrl: string;
+  otlpInternal: string;
+  scrapeTargets: ScrapeTarget[];
+  createdAt: string | null;
+}
+
+export interface DevopsStatus {
+  enabled: boolean;
+  state: string;
+  gitUrl: string | null;
+  ciUrl: string | null;
+  adminUser: string | null;
+  adminPassword: string | null;
+  registry: string | null;
+  bootstrapped: boolean;
+  message?: string;
+}
+
+export interface GitopsApp {
+  name: string;
+  repo: string;
+  branch: string;
+  path: string;
+  autoSync: boolean;
+  status?: 'Synced' | 'OutOfSync' | 'Error' | 'Unknown';
+  revision?: string | null;
+  appliedRevision?: string | null;
+  lastError?: string | null;
+  lastSyncAt?: string | null;
+}
+
+const base = (ws: string) => `/api/instances/${ws}/compute`;
+
+// — Servers (VMs) —
+
+export const listVms = (ws: string) => request<{ vms: VmInfo[] }>(`${base(ws)}/vms`);
+export const createVm = (ws: string, body: { name: string; image: VmImageId; plan: VmPlanId }) =>
+  request<VmInfo>(`${base(ws)}/vms`, { method: 'POST', body: JSON.stringify(body) });
+export const vmAction = (ws: string, id: string, action: 'stop' | 'start' | 'reboot' | 'terminate') =>
+  request<{ ok: true }>(`${base(ws)}/vms/${id}/action`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+export const vmLogs = (ws: string, id: string, tail = 200) =>
+  request<{ logs: string }>(`${base(ws)}/vms/${id}/logs?tail=${tail}`);
+
+// — Container tasks —
+
+export const listTasks = (ws: string) => request<{ tasks: TaskInfo[] }>(`${base(ws)}/tasks`);
+export const createTask = (
+  ws: string,
+  body: {
+    name: string;
+    image: string;
+    port?: number;
+    env?: Record<string, string>;
+    replicas?: number;
+    metricsPort?: number;
+    metricsPath?: string;
+  },
+) => request<TaskInfo>(`${base(ws)}/tasks`, { method: 'POST', body: JSON.stringify(body) });
+export const updateTask = (
+  ws: string,
+  task: string,
+  body: Partial<{
+    image: string;
+    port: number | null;
+    env: Record<string, string>;
+    replicas: number;
+    metricsPort: number | null;
+    metricsPath: string;
+  }>,
+) => request<TaskInfo>(`${base(ws)}/tasks/${task}`, { method: 'PATCH', body: JSON.stringify(body) });
+export const taskAction = (ws: string, task: string, action: 'restart' | 'delete') =>
+  request<{ ok: true }>(`${base(ws)}/tasks/${task}/action`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+export const taskLogs = (ws: string, task: string, tail = 200) =>
+  request<{ logs: string }>(`${base(ws)}/tasks/${task}/logs?tail=${tail}`);
+
+// — Managed databases —
+
+export const listDatabases = (ws: string) => request<{ databases: DbInfo[] }>(`${base(ws)}/databases`);
+export const createDatabase = (
+  ws: string,
+  body: { name: string; engine: DbEngineId; external?: boolean },
+) => request<DbInfo>(`${base(ws)}/databases`, { method: 'POST', body: JSON.stringify(body) });
+export const deleteDatabase = (ws: string, db: string) =>
+  request<void>(`${base(ws)}/databases/${db}`, { method: 'DELETE' });
+export const databaseLogs = (ws: string, db: string, tail = 200) =>
+  request<{ logs: string }>(`${base(ws)}/databases/${db}/logs?tail=${tail}`);
+
+// — Caches —
+
+export const listCaches = (ws: string) => request<{ caches: CacheInfo[] }>(`${base(ws)}/caches`);
+export const createCache = (
+  ws: string,
+  body: { name: string; engine: CacheEngineId; external?: boolean },
+) => request<CacheInfo>(`${base(ws)}/caches`, { method: 'POST', body: JSON.stringify(body) });
+export const deleteCache = (ws: string, cache: string) =>
+  request<void>(`${base(ws)}/caches/${cache}`, { method: 'DELETE' });
+
+// — DNS —
+
+export const listDns = (ws: string) => request<{ records: DnsRecord[] }>(`${base(ws)}/dns`);
+export const createDns = (ws: string, body: { record: string; type: DnsType; target: string }) =>
+  request<DnsRecord>(`${base(ws)}/dns`, { method: 'POST', body: JSON.stringify(body) });
+export const deleteDns = (ws: string, record: string) =>
+  request<void>(`${base(ws)}/dns/${record}`, { method: 'DELETE' });
+
+// — API gateways —
+
+export const listGateways = (ws: string) => request<{ gateways: GatewayInfo[] }>(`${base(ws)}/gateways`);
+export const createGateway = (ws: string, body: { name: string; routes: GatewayRoute[] }) =>
+  request<GatewayInfo>(`${base(ws)}/gateways`, { method: 'POST', body: JSON.stringify(body) });
+export const updateGateway = (ws: string, gw: string, routes: GatewayRoute[]) =>
+  request<GatewayInfo>(`${base(ws)}/gateways/${gw}`, {
+    method: 'PUT',
+    body: JSON.stringify({ routes }),
+  });
+export const deleteGateway = (ws: string, gw: string) =>
+  request<void>(`${base(ws)}/gateways/${gw}`, { method: 'DELETE' });
+
+// — CDN (Varnish) —
+
+export const listCdns = (ws: string) => request<{ cdns: CdnInfo[] }>(`${base(ws)}/cdns`);
+export const createCdn = (ws: string, body: { name: string; origin: string; ttlSeconds?: number }) =>
+  request<CdnInfo>(`${base(ws)}/cdns`, { method: 'POST', body: JSON.stringify(body) });
+export const purgeCdn = (ws: string, cdn: string) =>
+  request<{ ok: true }>(`${base(ws)}/cdns/${cdn}/purge`, { method: 'POST', body: '{}' });
+export const deleteCdn = (ws: string, cdn: string) =>
+  request<void>(`${base(ws)}/cdns/${cdn}`, { method: 'DELETE' });
+
+// — Observability (LGTM + OTel) —
+
+export const getObservability = (ws: string) =>
+  request<{ observability: ObsInfo | null }>(`${base(ws)}/observability`);
+export const enableObservability = (ws: string) =>
+  request<ObsInfo>(`${base(ws)}/observability`, { method: 'POST', body: '{}' });
+export const disableObservability = (ws: string) =>
+  request<void>(`${base(ws)}/observability`, { method: 'DELETE' });
+
+// — DevOps (Gitea + Woodpecker + GitOps) —
+
+export const getDevops = (ws: string) => request<DevopsStatus>(`${base(ws)}/devops`);
+export const enableDevops = (ws: string) =>
+  request<DevopsStatus>(`${base(ws)}/devops`, { method: 'POST', body: '{}' });
+export const retryDevopsBootstrap = (ws: string) =>
+  request<DevopsStatus>(`${base(ws)}/devops/retry-bootstrap`, { method: 'POST', body: '{}' });
+export const disableDevops = (ws: string) =>
+  request<void>(`${base(ws)}/devops`, { method: 'DELETE' });
+
+export const listGitopsApps = (ws: string) => request<{ apps: GitopsApp[] }>(`${base(ws)}/gitops/apps`);
+export const addGitopsApp = (
+  ws: string,
+  body: { name: string; repo: string; branch?: string; path?: string; autoSync?: boolean },
+) => request<GitopsApp>(`${base(ws)}/gitops/apps`, { method: 'POST', body: JSON.stringify(body) });
+export const syncGitopsApp = (ws: string, app: string) =>
+  request<GitopsApp>(`${base(ws)}/gitops/apps/${app}/sync`, { method: 'POST', body: '{}' });
+export const removeGitopsApp = (ws: string, app: string) =>
+  request<void>(`${base(ws)}/gitops/apps/${app}`, { method: 'DELETE' });
+
+// — Workspace summary —
+
+export const computeSummary = (ws: string) => request<Record<string, number>>(`${base(ws)}/summary`);

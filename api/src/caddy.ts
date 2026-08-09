@@ -40,6 +40,15 @@ export function parseTlsAsk(
     return { allowed: false, instance: null };
   }
   const sub = lower.slice(0, -suffix.length);
+  // Multi-label subs (e.g. app.demo.<domain>) belong to sm4rt compute: every
+  // label must be a valid DNS label and the instance is the last one.
+  if (sub.includes('.')) {
+    const labels = sub.split('.');
+    if (labels.length > 4 || labels.some((l) => !/^[a-z0-9][a-z0-9-]*$/.test(l) || l.length > 63)) {
+      return { allowed: false, instance: null };
+    }
+    return { allowed: false, instance: labels[labels.length - 1]! };
+  }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(sub)) {
     return { allowed: false, instance: null };
   }
