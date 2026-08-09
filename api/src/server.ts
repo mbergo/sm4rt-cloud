@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
+import { registerLenientJsonParser } from './json-body.ts';
 import { verifyToken } from '@clerk/backend';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -36,6 +37,7 @@ const MAX_TTL_HOURS = 7 * 24;
 const MAX_INSTANCES = Number(process.env.MAX_INSTANCES ?? 20);
 
 const app = Fastify({ logger: true });
+registerLenientJsonParser(app);
 
 async function createDriver(): Promise<CloudDriver> {
   if (DRIVER === 'swarm') {
