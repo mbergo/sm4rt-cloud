@@ -37,7 +37,15 @@ prompt() { # var, question, default
 }
 
 prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $DEFAULT_IP)" "cloud.local"
-prompt ACME_EMAIL      "Email for Let's Encrypt (empty = disable TLS, plain HTTP)" ""
+
+# Caddy handles certificates automatically (ACME). HTTPS is on by default for
+# real domains; local/test domains (cloud.local, *.sslip.io, …) default to HTTP.
+case "$INSTANCE_DOMAIN" in
+  cloud.local|localhost|*.sslip.io|*.nip.io|*.localhost) TLS_DEFAULT=no ;;
+  *) TLS_DEFAULT=yes ;;
+esac
+prompt ENABLE_TLS      "Enable HTTPS (automatic certificates via Caddy)? (yes/no)" "$TLS_DEFAULT"
+prompt ACME_EMAIL      "ACME account email (optional, for certificate expiry notices)" ""
 prompt ADMIN_USER      "Admin username" "admin"
 prompt ADMIN_PASS      "Admin password" "floci-admin"
 prompt CLOUD_TOKEN     "Console access token (empty = generate)" ""
@@ -55,14 +63,17 @@ if [ -z "$CLOUD_TOKEN" ]; then
   CLOUD_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
 fi
 CONSOLE_HOST="cloud.${INSTANCE_DOMAIN}"
-if [ -n "$ACME_EMAIL" ]; then INSTANCE_TLS=true; SCHEME=https; else INSTANCE_TLS=false; SCHEME=http; fi
+case "$ENABLE_TLS" in
+  [Yy]*|true) INSTANCE_TLS=true; SCHEME=https ;;
+  *)          INSTANCE_TLS=false; SCHEME=http ;;
+esac
 
 bold ""
 bold "  Plan"
 echo "    domain        *.${INSTANCE_DOMAIN}"
 echo "    console       ${SCHEME}://${CONSOLE_HOST}"
 echo "    admin         ${SCHEME}://${CONSOLE_HOST}/admin  (${ADMIN_USER})"
-echo "    tls           ${INSTANCE_TLS} (on-demand Let's Encrypt)"
+echo "    tls           ${INSTANCE_TLS} (automatic via Caddy${ACME_EMAIL:+, account $ACME_EMAIL})"
 echo "    driver        docker swarm"
 bold ""
 

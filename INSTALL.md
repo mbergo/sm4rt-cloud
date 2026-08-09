@@ -23,16 +23,18 @@ That's it. No cloud account, no external services.
 curl -fsSL https://raw.githubusercontent.com/mbergo/sm4rt-cloud/main/install/install.sh | sudo bash
 ```
 
-The wizard asks for: domain, Let's Encrypt email (empty = plain HTTP),
-admin user/pass, console token. It then installs Docker, initializes
-Swarm, starts Caddy (edge + on-demand TLS) and the floci-cloud console.
+The wizard asks for: domain, whether to enable HTTPS (Caddy issues and
+renews certificates automatically — no separate Let's Encrypt setup),
+an optional ACME email, admin user/pass, console token. It then installs
+Docker, initializes Swarm, starts Caddy (edge + on-demand TLS) and the
+floci-cloud console.
 
 At the end it prints the console URL, admin URL and access token.
 
 Non-interactive:
 
 ```bash
-sudo INSTANCE_DOMAIN=cloud.example.com ACME_EMAIL=you@example.com bash install.sh
+sudo INSTANCE_DOMAIN=cloud.example.com ENABLE_TLS=yes bash install.sh
 ```
 
 Private images (e.g. private GHCR): pass registry credentials — the

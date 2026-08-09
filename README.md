@@ -108,7 +108,7 @@ chmod +x add-node.sh
 Non-interactive / private registry:
 
 ```bash
-sudo INSTANCE_DOMAIN=cloud.example.com ACME_EMAIL=you@example.com \
+sudo INSTANCE_DOMAIN=cloud.example.com ENABLE_TLS=yes \
      REGISTRY_USER=you REGISTRY_PASS=ghp_xxx bash install.sh
 ```
 
@@ -202,7 +202,7 @@ always sends the workspace test pair. Source lives in [`cli/`](cli/).
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `floci-admin` | Admin area (Basic auth) |
 | `FLOCI_IMAGE` | `floci/floci:latest` | Engine image |
 | `INSTANCE_TLS` | `false` | HTTPS for workspace endpoints |
-| `ACME_EMAIL` | _(unset)_ | Let's Encrypt account (swarm/Caddy) |
+| `ACME_EMAIL` | _(unset)_ | Optional ACME account email for expiry notices (swarm/Caddy) |
 | `CADDY_ADMIN_URL` | _(unset)_ | Caddy admin API (swarm edge) |
 | `REGISTRY_USER/PASS/SERVER` | _(unset)_ / `ghcr.io` | Pull private images on all nodes (swarm) |
 | `INGRESS_CLASS` | `nginx` | k8s ingress mode |
