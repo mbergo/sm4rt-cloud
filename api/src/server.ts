@@ -11,6 +11,9 @@ import { EXPLORER_SERVICES, explore } from './explorer.ts';
 import { isRealServiceId } from './services.ts';
 import { parseTlsAsk } from './caddy.ts';
 import { emit, subscribe } from './events.ts';
+import { ComputeManager } from './compute.ts';
+import { DevopsManager } from './devops.ts';
+import { registerComputeRoutes } from './compute-routes.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -57,6 +60,14 @@ async function createDriver(): Promise<CloudDriver> {
 
 const provisioner = await createDriver();
 app.log.info({ driver: provisioner.kind }, 'cloud driver initialized');
+
+// Sm4rt compute (real VMs/tasks/DBs/caches/CDN/DNS/obs/devops) — swarm only.
+const computeEnabled = provisioner.kind === 'swarm';
+const compute = new ComputeManager({ instanceDomain: INSTANCE_DOMAIN, tls: INSTANCE_TLS });
+const devops = new DevopsManager(compute);
+if (computeEnabled) {
+  devops.startReconciler(async () => (await provisioner.list()).map((i) => i.name));
+}
 
 if (!TOKEN && !CLERK_SECRET_KEY) {
   app.log.warn(
@@ -370,6 +381,13 @@ app.delete('/api/instances/:name', async (request, reply) => {
   if (!deleted) {
     return reply.code(404).send({ error: 'instance not found' });
   }
+  if (computeEnabled) {
+    // best-effort cleanup of sm4rt compute workloads owned by this workspace
+    await devops.disable(name).catch(() => {});
+    await compute.deleteAllFor(name).catch((err) => {
+      request.log.warn({ err, ws: name }, 'compute cleanup failed');
+    });
+  }
   return reply.code(204).send();
 });
 
@@ -398,6 +416,13 @@ async function requireRunningInstance(name: string): Promise<InstanceInfo | null
   }
   return provisioner.get(name);
 }
+
+registerComputeRoutes(app, {
+  compute,
+  devops,
+  requireInstance: requireRunningInstance,
+  enabled: computeEnabled,
+});
 
 const VALID_REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 

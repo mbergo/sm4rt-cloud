@@ -68,7 +68,7 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const bearer = token ?? (tokenProvider ? await tokenProvider() : null) ?? getToken();
   const response = await fetch(path, {
     ...init,

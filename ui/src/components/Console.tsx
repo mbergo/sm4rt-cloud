@@ -18,6 +18,7 @@ import {
   FileSearch,
   FileText,
   FlaskConical,
+  GitBranch,
   GitPullRequest,
   Gauge,
   Globe,
@@ -106,8 +107,30 @@ import {
 } from '../lib/api';
 import { snippets, timeAgo, timeUntil } from '../lib/format';
 import { CopyButton, GhostButton, PrimaryButton, StatusBadge } from './bits';
+import {
+  CachesPage,
+  CdnPage,
+  ContainersPage,
+  DatabasesPage,
+  DevopsPage,
+  DnsPage,
+  GatewaysPage,
+  ObservabilityPage,
+  ServersPage,
+} from './Compute';
+import { computeSummary } from '../lib/compute';
 
-type SectionId = 'overview' | ServiceId | 'services' | 'agents' | 'monitoring' | 'logs-instance' | 'explorer';
+type SectionId =
+  | 'overview'
+  | ServiceId
+  | 'services'
+  | 'agents'
+  | 'monitoring'
+  | 'logs-instance'
+  | 'explorer'
+  | 'cdn'
+  | 'observability'
+  | 'devops';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -124,14 +147,17 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'kinesis', label: 'Streams', icon: AudioWaveform, group: 'Messaging' },
   { id: 'ses', label: 'Email (SES)', icon: Mail, group: 'Messaging' },
   { id: 'ec2', label: 'Servers', icon: Server, group: 'Compute' },
+  { id: 'ecs', label: 'Containers', icon: Ship, group: 'Compute' },
   { id: 'lambda', label: 'Functions', icon: Zap, group: 'Compute' },
   { id: 'ecr', label: 'Container registry', icon: Container, group: 'Compute' },
-  { id: 'ecs', label: 'ECS clusters', icon: Ship, group: 'Compute' },
   { id: 'athena', label: 'Athena SQL', icon: FileSearch, group: 'Analytics' },
   { id: 'glue', label: 'Glue catalog', icon: TableProperties, group: 'Analytics' },
   { id: 'firehose', label: 'Firehose', icon: Droplets, group: 'Analytics' },
   { id: 'apigw', label: 'API Gateway', icon: Webhook, group: 'Web & edge' },
-  { id: 'route53', label: 'Hosted zones', icon: Globe2, group: 'Web & edge' },
+  { id: 'route53', label: 'DNS zone', icon: Globe2, group: 'Web & edge' },
+  { id: 'cdn', label: 'CDN', icon: HardDrive, group: 'Web & edge' },
+  { id: 'devops', label: 'Sm4rt DevOps', icon: GitBranch, group: 'Platform' },
+  { id: 'observability', label: 'Observability', icon: Activity, group: 'Platform' },
   { id: 'iam', label: 'IAM', icon: ShieldCheck, group: 'Security & identity' },
   { id: 'kms', label: 'KMS keys', icon: Lock, group: 'Security & identity' },
   { id: 'cognito', label: 'User pools', icon: Users, group: 'Security & identity' },
@@ -333,7 +359,7 @@ export default function Console({
         ) : !detail ? (
           <div className="mt-8 h-40 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]" />
         ) : section === 'overview' ? (
-          <Overview detail={detail} notify={notify} onDeleted={onBack} />
+          <Overview detail={detail} notify={notify} onDeleted={onBack} onNavigate={setSection} />
         ) : section === 'logs-instance' ? (
           <LogsView name={name} />
         ) : section === 'services' ? (
@@ -344,6 +370,24 @@ export default function Console({
           <MonitoringView instance={name} />
         ) : section === 'explorer' ? (
           <ApiExplorerView instance={name} />
+        ) : section === 'ec2' ? (
+          <ServersPage instance={name} notify={notify} />
+        ) : section === 'ecs' ? (
+          <ContainersPage instance={name} notify={notify} />
+        ) : section === 'rds' ? (
+          <DatabasesPage instance={name} notify={notify} />
+        ) : section === 'elasticache' ? (
+          <CachesPage instance={name} notify={notify} />
+        ) : section === 'route53' ? (
+          <DnsPage instance={name} notify={notify} />
+        ) : section === 'apigw' ? (
+          <GatewaysPage instance={name} notify={notify} />
+        ) : section === 'cdn' ? (
+          <CdnPage instance={name} notify={notify} />
+        ) : section === 'observability' ? (
+          <ObservabilityPage instance={name} notify={notify} />
+        ) : section === 'devops' ? (
+          <DevopsPage instance={name} notify={notify} />
         ) : (
           <RegionContext.Provider value={region}>
             <ServiceView key={`${section}:${region}`} instance={name} service={section} notify={notify} />
@@ -358,16 +402,80 @@ function Overview({
   detail,
   notify,
   onDeleted,
+  onNavigate,
 }: {
   detail: InstanceDetail;
   notify: (message: string, tone?: 'ok' | 'err') => void;
   onDeleted: () => void;
+  onNavigate: (section: SectionId) => void;
 }) {
   const [snippet, setSnippet] = useState('cli');
   const [confirming, setConfirming] = useState(false);
+  const [summary, setSummary] = useState<Record<string, number> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      computeSummary(detail.name)
+        .then((counts) => {
+          if (alive) setSummary(counts);
+        })
+        .catch(() => {
+          if (alive) setSummary(null);
+        });
+    load();
+    const timer = setInterval(load, 15000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [detail.name]);
+
+  const tiles: { key: string; label: string; section: SectionId; icon: typeof Server }[] = [
+    { key: 'vm', label: 'Servers', section: 'ec2', icon: Server },
+    { key: 'task', label: 'Containers', section: 'ecs', icon: Ship },
+    { key: 'db', label: 'Databases', section: 'rds', icon: Cylinder },
+    { key: 'cache', label: 'Caches', section: 'elasticache', icon: MemoryStick },
+    { key: 'dns-records', label: 'DNS records', section: 'route53', icon: Globe2 },
+    { key: 'gateway', label: 'API gateways', section: 'apigw', icon: Webhook },
+    { key: 'cdn', label: 'CDN', section: 'cdn', icon: HardDrive },
+    { key: 'obs', label: 'Observability', section: 'observability', icon: Activity },
+    { key: 'devops', label: 'DevOps', section: 'devops', icon: GitBranch },
+  ];
 
   return (
     <div className="space-y-6">
+      {summary ? (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+            Cloud resources
+          </h3>
+          <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9">
+            {tiles.map((tile) => {
+              const count = summary[tile.key] ?? 0;
+              const Icon = tile.icon;
+              return (
+                <button
+                  key={tile.key}
+                  type="button"
+                  onClick={() => onNavigate(tile.section)}
+                  className="group rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5 text-left transition hover:border-amber-400/30 hover:bg-white/[0.06]"
+                >
+                  <div className="flex items-center justify-between">
+                    <Icon className="h-3.5 w-3.5 text-stone-500 transition group-hover:text-amber-300" />
+                    <span
+                      className={`text-lg font-semibold tabular-nums ${count > 0 ? 'text-amber-200' : 'text-stone-500'}`}
+                    >
+                      {count}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-[11px] text-stone-400">{tile.label}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
           AWS endpoint
