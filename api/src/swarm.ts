@@ -18,13 +18,16 @@ import {
   type OtelAgentOptions,
   type OtelAgentRun,
   type OtelAgentRunStatus,
+  type ServiceConfigInfo,
   type ServiceMetrics,
+  type ServiceTargetInfo,
 } from './driver.ts';
 import {
   SERVICE_CATALOG,
   type RealServiceId,
   type RealServiceInfo,
   type RealServiceStatus,
+  type ServiceInstanceRef,
 } from './services.ts';
 import { emit } from './events.ts';
 
@@ -34,6 +37,10 @@ const MANAGED_BY = 'floci-cloud';
 const MANAGED_LABEL = 'floci.cloud/managed-by';
 const INSTANCE_LABEL = 'floci.cloud/instance';
 const SERVICE_LABEL = 'floci.cloud/service';
+/** named catalog instance ('' / absent = the default instance) */
+const SERVICE_INSTANCE_LABEL = 'floci.cloud/service-instance';
+const WS_OWNER_LABEL = 'sm4rt.workspace';
+const MAX_INSTANCES_PER_SERVICE = 5;
 const AGENT_LABEL = 'floci.cloud/agent';
 const CREATED_LABEL = 'floci.cloud/created-at';
 const EXPIRES_LABEL = 'floci.cloud/expires-at';
@@ -120,6 +127,44 @@ function demuxLogs(buf: Buffer): string {
   return chunks.join('');
 }
 
+/**
+ * Stateful demuxer for follow-mode log streams. Chunks may split frames at
+ * any byte, so partial frames are buffered until the next push. Mode
+ * (multiplexed vs raw TTY) is detected once, from the first bytes seen.
+ */
+export function createLogDemuxer(): { push: (chunk: Buffer) => string } {
+  let pending = Buffer.alloc(0);
+  let mode: 'unknown' | 'multiplexed' | 'raw' = 'unknown';
+  return {
+    push(chunk: Buffer): string {
+      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      if (mode === 'unknown') {
+        if (pending.length < 4) return '';
+        const first = pending[0] ?? 255;
+        mode =
+          first <= 2 && pending[1] === 0 && pending[2] === 0 && pending[3] === 0
+            ? 'multiplexed'
+            : 'raw';
+      }
+      if (mode === 'raw') {
+        const out = pending.toString('utf8');
+        pending = Buffer.alloc(0);
+        return out;
+      }
+      const chunks: string[] = [];
+      let offset = 0;
+      while (offset + 8 <= pending.length) {
+        const size = pending.readUInt32BE(offset + 4);
+        if (offset + 8 + size > pending.length) break; // partial frame — wait
+        chunks.push(pending.subarray(offset + 8, offset + 8 + size).toString('utf8'));
+        offset += 8 + size;
+      }
+      pending = pending.subarray(offset);
+      return chunks.join('');
+    },
+  };
+}
+
 export class SwarmDriver implements CloudDriver {
   readonly kind = 'swarm' as const;
   private docker: Docker;
@@ -157,20 +202,22 @@ export class SwarmDriver implements CloudDriver {
     return `${this.scheme()}://${this.hostFor(name)}`;
   }
 
-  serviceHostFor(name: string, service: RealServiceId): string {
-    return `svc-${service}-${name}`;
+  serviceHostFor(name: string, service: RealServiceId, instanceName?: string): string {
+    return instanceName ? `svc-${service}-${instanceName}-${name}` : `svc-${service}-${name}`;
   }
 
-  serviceExternalHostFor(name: string, service: RealServiceId): string {
-    return `${name}-${service}.${this.opts.instanceDomain}`;
+  serviceExternalHostFor(name: string, service: RealServiceId, instanceName?: string): string {
+    const prefix = instanceName ? `${name}-${service}-${instanceName}` : `${name}-${service}`;
+    return `${prefix}.${this.opts.instanceDomain}`;
   }
 
   private instanceServiceName(name: string): string {
     return `${SERVICE_PREFIX}${name}`;
   }
 
-  private catalogServiceName(name: string, service: RealServiceId): string {
-    return `${SERVICE_PREFIX}${name}-svc-${service}`;
+  private catalogServiceName(name: string, service: RealServiceId, instanceName?: string): string {
+    const base = `${SERVICE_PREFIX}${name}-svc-${service}`;
+    return instanceName ? `${base}--${instanceName}` : base;
   }
 
   /**
@@ -487,39 +534,65 @@ export class SwarmDriver implements CloudDriver {
   private async findCatalogService(
     name: string,
     service: RealServiceId,
+    instanceName?: string,
   ): Promise<Record<string, any> | null> {
-    const services = await this.listManagedServices({
-      name: [this.catalogServiceName(name, service)],
-    });
+    const wanted = this.catalogServiceName(name, service, instanceName);
+    const services = await this.listManagedServices({ name: [wanted] });
     return (
-      (services as Array<Record<string, any>>).find(
-        (s) => s.Spec?.Name === this.catalogServiceName(name, service),
-      ) ?? null
+      (services as Array<Record<string, any>>).find((s) => s.Spec?.Name === wanted) ?? null
     );
+  }
+
+  private async taskStatusOf(
+    specName: string,
+  ): Promise<{ status: RealServiceStatus; statusDetail: string | null }> {
+    const task = await this.newestTask(specName);
+    if (!task) {
+      return { status: 'starting', statusDetail: 'scheduling task' };
+    }
+    if (task.state === 'running') {
+      return { status: 'running', statusDetail: null };
+    }
+    if (task.state === 'failed' || task.state === 'rejected') {
+      return { status: 'error', statusDetail: task.error ?? `task ${task.state}` };
+    }
+    return { status: 'starting', statusDetail: `task ${task.state}` };
   }
 
   private async describeCatalogService(
     name: string,
     service: RealServiceId,
-    svc: Record<string, any> | null,
+    svcs: Record<string, any>[],
   ): Promise<RealServiceInfo> {
     const spec = SERVICE_CATALOG[service];
+    const instances: ServiceInstanceRef[] = await Promise.all(
+      svcs.map(async (svc) => {
+        const labels: Record<string, string> = svc.Spec?.Labels ?? {};
+        const inst = labels[SERVICE_INSTANCE_LABEL] || null;
+        const { status, statusDetail } = await this.taskStatusOf(String(svc.Spec?.Name));
+        return {
+          name: inst,
+          serviceName: String(svc.Spec?.Name),
+          status,
+          statusDetail,
+          host: this.serviceHostFor(name, service, inst ?? undefined),
+          externalUrl: spec.httpIngressPort
+            ? `${this.scheme()}://${this.serviceExternalHostFor(name, service, inst ?? undefined)}`
+            : null,
+        };
+      }),
+    );
+    // aggregate: running > starting > error > stopped
     let status: RealServiceStatus = 'stopped';
     let statusDetail: string | null = null;
-    if (svc) {
-      const task = await this.newestTask(String(svc.Spec?.Name));
-      if (!task) {
-        status = 'starting';
-        statusDetail = 'scheduling task';
-      } else if (task.state === 'running') {
-        status = 'running';
-      } else if (task.state === 'failed' || task.state === 'rejected') {
-        status = 'error';
-        statusDetail = task.error ?? `task ${task.state}`;
-      } else {
-        status = 'starting';
-        statusDetail = `task ${task.state}`;
-      }
+    if (instances.some((i) => i.status === 'running')) {
+      status = 'running';
+    } else if (instances.some((i) => i.status === 'starting')) {
+      status = 'starting';
+      statusDetail = instances.find((i) => i.status === 'starting')?.statusDetail ?? null;
+    } else if (instances.some((i) => i.status === 'error')) {
+      status = 'error';
+      statusDetail = instances.find((i) => i.status === 'error')?.statusDetail ?? null;
     }
     const serviceHost = this.serviceHostFor(name, service);
     const externalUrl = spec.httpIngressPort
@@ -534,6 +607,7 @@ export class SwarmDriver implements CloudDriver {
       status,
       statusDetail,
       endpoints: spec.endpoints({ serviceHost, externalUrl }),
+      instances,
     };
   }
 
@@ -545,30 +619,38 @@ export class SwarmDriver implements CloudDriver {
       throw err;
     }
     const services = await this.listManagedServices({});
-    const byId = new Map<string, Record<string, any>>();
+    const byId = new Map<string, Record<string, any>[]>();
     for (const svc of services as Array<Record<string, any>>) {
       const labels: Record<string, string> = svc.Spec?.Labels ?? {};
-      if (labels[INSTANCE_LABEL] === name && labels[SERVICE_LABEL]) {
-        byId.set(labels[SERVICE_LABEL], svc);
+      const id = labels[SERVICE_LABEL] ?? '';
+      // sidecars carry `${service}-${sidecar}` labels — only group primaries
+      if (labels[INSTANCE_LABEL] === name && id && id in SERVICE_CATALOG) {
+        const list = byId.get(id) ?? [];
+        list.push(svc);
+        byId.set(id, list);
       }
     }
     return Promise.all(
       (Object.keys(SERVICE_CATALOG) as RealServiceId[]).map((id) =>
-        this.describeCatalogService(name, id, byId.get(id) ?? null),
+        this.describeCatalogService(name, id, byId.get(id) ?? []),
       ),
     );
   }
 
   async getService(name: string, service: RealServiceId): Promise<RealServiceInfo> {
-    const svc = await this.findCatalogService(name, service);
-    return this.describeCatalogService(name, service, svc);
+    const services = await this.listManagedServices({});
+    const mine = (services as Array<Record<string, any>>).filter((svc) => {
+      const labels: Record<string, string> = svc.Spec?.Labels ?? {};
+      return labels[INSTANCE_LABEL] === name && labels[SERVICE_LABEL] === service;
+    });
+    return this.describeCatalogService(name, service, mine);
   }
 
   async serviceLogs(name: string, service: RealServiceId, tailLines: number): Promise<string> {
     return this.serviceLogsByName(this.catalogServiceName(name, service), tailLines);
   }
 
-  async startService(name: string, service: RealServiceId): Promise<void> {
+  async startService(name: string, service: RealServiceId, instanceName?: string): Promise<void> {
     await this.ensureNetwork();
     const instance = await this.get(name);
     if (!instance) {
@@ -576,13 +658,24 @@ export class SwarmDriver implements CloudDriver {
       err.statusCode = 404;
       throw err;
     }
-    const existing = await this.findCatalogService(name, service);
+    const existing = await this.findCatalogService(name, service, instanceName);
     if (existing) {
       return;
     }
+    if (instanceName) {
+      const info = await this.getService(name, service);
+      if ((info.instances?.length ?? 0) >= MAX_INSTANCES_PER_SERVICE) {
+        throw new ConflictError(
+          `limit of ${MAX_INSTANCES_PER_SERVICE} instances per service reached`,
+        );
+      }
+    }
     const spec = SERVICE_CATALOG[service];
-    const serviceHost = this.serviceHostFor(name, service);
-    const externalHost = this.serviceExternalHostFor(name, service);
+    const serviceHost = this.serviceHostFor(name, service, instanceName);
+    const externalHost = this.serviceExternalHostFor(name, service, instanceName);
+    const volumePrefix = instanceName
+      ? `${SERVICE_PREFIX}${name}-${service}--${instanceName}`
+      : `${SERVICE_PREFIX}${name}-${service}`;
     // Swarm has no pods: sidecars become sibling services, so "localhost"
     // references (e.g. Flink's jobmanager.rpc.address) must point at the
     // main service's network alias instead.
@@ -597,7 +690,7 @@ export class SwarmDriver implements CloudDriver {
       (v) =>
         ({
           Type: 'volume',
-          Source: `${SERVICE_PREFIX}${name}-${service}-${v.name}`,
+          Source: `${volumePrefix}-${v.name}`,
           Target: v.mountPath,
           VolumeOptions: {
             Labels: { [MANAGED_LABEL]: MANAGED_BY, [INSTANCE_LABEL]: name },
@@ -608,6 +701,7 @@ export class SwarmDriver implements CloudDriver {
       [MANAGED_LABEL]: MANAGED_BY,
       [INSTANCE_LABEL]: name,
       [SERVICE_LABEL]: service,
+      ...(instanceName ? { [SERVICE_INSTANCE_LABEL]: instanceName } : {}),
     };
     // caddy labels go on the service spec only (not the container) — the
     // proxy scans both, and duplicates would generate conflicting sites
@@ -615,7 +709,7 @@ export class SwarmDriver implements CloudDriver {
       ? { ...labels, ...this.caddyLabels(externalHost, spec.httpIngressPort) }
       : labels;
     await this.createSwarmService({
-      Name: this.catalogServiceName(name, service),
+      Name: this.catalogServiceName(name, service, instanceName),
       Labels: serviceLabels,
       TaskTemplate: {
         ContainerSpec: {
@@ -647,11 +741,12 @@ export class SwarmDriver implements CloudDriver {
         (e) => `${e.name}=${e.value.replaceAll('localhost', serviceHost)}`,
       );
       await this.createSwarmService({
-        Name: `${this.catalogServiceName(name, service)}-${sidecar.name}`,
+        Name: `${this.catalogServiceName(name, service, instanceName)}-${sidecar.name}`,
         Labels: {
           [MANAGED_LABEL]: MANAGED_BY,
           [INSTANCE_LABEL]: name,
           [SERVICE_LABEL]: `${service}-${sidecar.name}`,
+          ...(instanceName ? { [SERVICE_INSTANCE_LABEL]: instanceName } : {}),
         },
         TaskTemplate: {
           ContainerSpec: {
@@ -684,15 +779,17 @@ export class SwarmDriver implements CloudDriver {
     }
   }
 
-  async stopService(name: string, service: RealServiceId): Promise<void> {
+  async stopService(name: string, service: RealServiceId, instanceName?: string): Promise<void> {
     const services = await this.listManagedServices({});
     const prefix = `${service}`;
+    const wantedInst = instanceName ?? '';
     const mine = (services as Array<Record<string, any>>).filter((svc) => {
       const labels: Record<string, string> = svc.Spec?.Labels ?? {};
       const svcLabel = labels[SERVICE_LABEL] ?? '';
       return (
         labels[INSTANCE_LABEL] === name &&
-        (svcLabel === prefix || svcLabel.startsWith(`${prefix}-`))
+        (svcLabel === prefix || svcLabel.startsWith(`${prefix}-`)) &&
+        (labels[SERVICE_INSTANCE_LABEL] ?? '') === wantedInst
       );
     });
     await Promise.all(
@@ -707,6 +804,197 @@ export class SwarmDriver implements CloudDriver {
           }),
       ),
     );
+  }
+
+  // — post-provision panel (logs streaming, exec, config) —
+
+  /**
+   * Resolve a target to an owned swarm service. `target` is either a full
+   * swarm service name or a catalog service id. Ownership = our catalog
+   * label OR compute.ts's `sm4rt.workspace` label.
+   */
+  private async resolveOwnedService(
+    name: string,
+    target: string,
+  ): Promise<{ id: string; specName: string; svc: Record<string, any> }> {
+    const services = await this.listManagedServices({});
+    const owned = (services as Array<Record<string, any>>).filter((svc) => {
+      const labels: Record<string, string> = svc.Spec?.Labels ?? {};
+      return labels[INSTANCE_LABEL] === name || labels[WS_OWNER_LABEL] === name;
+    });
+    const found =
+      owned.find((svc) => String(svc.Spec?.Name) === target) ??
+      // catalog id shorthand → default instance
+      owned.find((svc) => String(svc.Spec?.Name) === this.catalogServiceName(name, target as RealServiceId));
+    if (!found) {
+      const err = new Error(`service "${target}" not found in "${name}"`) as Error & {
+        statusCode: number;
+      };
+      err.statusCode = 404;
+      throw err;
+    }
+    return { id: String(found.ID), specName: String(found.Spec?.Name), svc: found };
+  }
+
+  async streamServiceLogs(
+    name: string,
+    target: string,
+    tailLines: number,
+  ): Promise<{ stream: NodeJS.ReadableStream; close: () => void }> {
+    const { specName } = await this.resolveOwnedService(name, target);
+    const svc = this.docker.getService(specName);
+    const stream = (await svc.logs({
+      follow: true,
+      stdout: true,
+      stderr: true,
+      tail: tailLines,
+    })) as unknown as NodeJS.ReadableStream;
+    const close = () => {
+      const s = stream as unknown as { destroy?: () => void };
+      try {
+        s.destroy?.();
+      } catch {
+        // already gone
+      }
+    };
+    return { stream, close };
+  }
+
+  async execInService(
+    name: string,
+    target: string,
+    cmd: string[],
+    timeoutMs = 30_000,
+  ): Promise<{ output: string; exitCode: number | null; timedOut: boolean }> {
+    const { specName } = await this.resolveOwnedService(name, target);
+    const task = await this.newestTask(specName);
+    if (!task?.containerId) {
+      const err = new Error(`no running container for "${target}"`) as Error & {
+        statusCode: number;
+      };
+      err.statusCode = 409;
+      throw err;
+    }
+    const container = this.docker.getContainer(task.containerId);
+    const exec = await container.exec({
+      Cmd: cmd,
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+    const stream = (await exec.start({})) as NodeJS.ReadableStream & { destroy?: () => void };
+    const demux = createLogDemuxer();
+    let output = '';
+    let timedOut = false;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        stream.destroy?.();
+        resolve();
+      }, timeoutMs);
+      stream.on('data', (chunk: Buffer) => {
+        output += demux.push(chunk);
+        if (output.length > 256 * 1024) {
+          timedOut = false;
+          clearTimeout(timer);
+          stream.destroy?.();
+          resolve();
+        }
+      });
+      stream.on('end', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      stream.on('error', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    let exitCode: number | null = null;
+    if (!timedOut) {
+      try {
+        const inspect = await exec.inspect();
+        exitCode = typeof inspect.ExitCode === 'number' ? inspect.ExitCode : null;
+      } catch {
+        exitCode = null;
+      }
+    }
+    return { output, exitCode, timedOut };
+  }
+
+  async getServiceConfig(name: string, target: string): Promise<ServiceConfigInfo> {
+    const { svc, specName } = await this.resolveOwnedService(name, target);
+    const spec = svc.Spec ?? {};
+    const containerSpec = spec.TaskTemplate?.ContainerSpec ?? {};
+    const mounts = (containerSpec.Mounts ?? []).map((m: Record<string, any>) => ({
+      source: String(m.Source ?? ''),
+      target: String(m.Target ?? ''),
+      type: String(m.Type ?? 'volume'),
+    }));
+    const ports = (svc.Endpoint?.Ports ?? spec.EndpointSpec?.Ports ?? []).map(
+      (p: Record<string, any>) => ({
+        published: typeof p.PublishedPort === 'number' ? p.PublishedPort : null,
+        target: Number(p.TargetPort ?? 0),
+        protocol: String(p.Protocol ?? 'tcp'),
+      }),
+    );
+    return {
+      name: specName,
+      image: String(containerSpec.Image ?? ''),
+      env: (containerSpec.Env ?? []).map(String),
+      mounts,
+      ports,
+      replicas: spec.Mode?.Replicated?.Replicas ?? null,
+      createdAt: svc.CreatedAt ?? null,
+      updatedAt: svc.UpdatedAt ?? null,
+    };
+  }
+
+  async updateServiceEnv(name: string, target: string, env: string[]): Promise<void> {
+    const { id, svc } = await this.resolveOwnedService(name, target);
+    const service = this.docker.getService(id);
+    const current = (await service.inspect()) as Record<string, any>;
+    const spec = structuredClone(current.Spec ?? svc.Spec ?? {});
+    spec.TaskTemplate = spec.TaskTemplate ?? {};
+    spec.TaskTemplate.ContainerSpec = spec.TaskTemplate.ContainerSpec ?? {};
+    spec.TaskTemplate.ContainerSpec.Env = env;
+    // bump ForceUpdate so swarm restarts tasks even if only env changed
+    spec.TaskTemplate.ForceUpdate = (Number(spec.TaskTemplate.ForceUpdate) || 0) + 1;
+    await service.update({
+      version: Number(current.Version?.Index ?? 0),
+      ...spec,
+    } as Record<string, any>);
+  }
+
+  async listServiceTargets(name: string): Promise<ServiceTargetInfo[]> {
+    const services = await this.listManagedServices({});
+    const targets: ServiceTargetInfo[] = [];
+    for (const svc of services as Array<Record<string, any>>) {
+      const labels: Record<string, string> = svc.Spec?.Labels ?? {};
+      const specName = String(svc.Spec?.Name ?? '');
+      if (labels[INSTANCE_LABEL] === name) {
+        const serviceId = labels[SERVICE_LABEL] ?? null;
+        const inst = labels[SERVICE_INSTANCE_LABEL] || null;
+        const catalogSpec =
+          serviceId && serviceId in SERVICE_CATALOG
+            ? SERVICE_CATALOG[serviceId as RealServiceId]
+            : null;
+        const base = catalogSpec?.label ?? serviceId ?? specName;
+        targets.push({
+          name: specName,
+          kind: 'catalog',
+          service: serviceId,
+          label: inst ? `${base} (${inst})` : base,
+        });
+      } else if (labels[WS_OWNER_LABEL] === name) {
+        targets.push({
+          name: specName,
+          kind: 'compute',
+          service: labels['sm4rt.kind'] ?? null,
+          label: labels['sm4rt.name'] ?? specName,
+        });
+      }
+    }
+    return targets.sort((a, b) => a.label.localeCompare(b.label));
   }
 
   // — observability —

@@ -62,6 +62,30 @@ export interface NodeInfo {
   memUsedBytes: number | null;
 }
 
+/** Effective config of one running swarm service (post-provision panel). */
+export interface ServiceConfigInfo {
+  name: string;
+  image: string;
+  env: string[];
+  mounts: { source: string; target: string; type: string }[];
+  ports: { published: number | null; target: number; protocol: string }[];
+  replicas: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** One owned service the shared log console can attach to. */
+export interface ServiceTargetInfo {
+  /** full swarm service name (target for logs/exec/config) */
+  name: string;
+  /** 'catalog' | 'compute' */
+  kind: string;
+  /** catalog service id or compute kind, when known */
+  service: string | null;
+  /** human label for pickers */
+  label: string;
+}
+
 /** Thrown by drivers when an instance name is already taken. */
 export class ConflictError extends Error {
   readonly statusCode = 409;
@@ -109,8 +133,27 @@ export interface CloudDriver {
   listServices(name: string): Promise<RealServiceInfo[]>;
   getService(name: string, service: RealServiceId): Promise<RealServiceInfo>;
   serviceLogs(name: string, service: RealServiceId, tailLines: number): Promise<string>;
-  startService(name: string, service: RealServiceId): Promise<void>;
-  stopService(name: string, service: RealServiceId): Promise<void>;
+  startService(name: string, service: RealServiceId, instanceName?: string): Promise<void>;
+  stopService(name: string, service: RealServiceId, instanceName?: string): Promise<void>;
+
+  // — post-provision panel (optional; swarm only for now) —
+  /** follow-mode log stream for any owned service; caller must close() */
+  streamServiceLogs?(
+    name: string,
+    target: string,
+    tailLines: number,
+  ): Promise<{ stream: NodeJS.ReadableStream; close: () => void }>;
+  /** one-shot exec inside the newest task's container */
+  execInService?(
+    name: string,
+    target: string,
+    cmd: string[],
+    timeoutMs?: number,
+  ): Promise<{ output: string; exitCode: number | null; timedOut: boolean }>;
+  getServiceConfig?(name: string, target: string): Promise<ServiceConfigInfo>;
+  updateServiceEnv?(name: string, target: string, env: string[]): Promise<void>;
+  /** every owned swarm service, for the shared log console picker */
+  listServiceTargets?(name: string): Promise<ServiceTargetInfo[]>;
 
   // — observability —
   instanceMetrics(name: string): Promise<InstanceMetrics>;
