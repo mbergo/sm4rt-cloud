@@ -10,14 +10,17 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
   CACHE_ENGINES,
+  CACHE_PLANS,
   CACHE_PORT_RANGE,
   DB_ENGINES,
+  DB_PLANS,
   DB_PORT_RANGE,
   SM4RT_KIND_LABEL,
   SM4RT_META_LABEL,
   SM4RT_NAME_LABEL,
   SM4RT_WS_LABEL,
   SSH_PORT_RANGE,
+  TASK_PLANS,
   VM_IMAGES,
   VM_PLANS,
   alloyLogsConfig,
@@ -28,6 +31,7 @@ import {
   gatewayCaddyfile,
   isCacheEngineId,
   isDbEngineId,
+  isServicePlanId,
   isValidDnsRecordName,
   isValidImageRef,
   isValidResourceName,
@@ -40,6 +44,7 @@ import {
   type DbEngineId,
   type GatewayRoute,
   type ScrapeTarget,
+  type ServicePlanId,
   type VmImageId,
   type VmPlanId,
 } from './compute-templates.ts';
@@ -145,6 +150,8 @@ export interface TaskInfo {
   state: string;
   url: string | null;
   env: Record<string, string>;
+  plan: ServicePlanId;
+  planLabel: string;
   metricsPort: number | null;
   metricsPath: string;
   gitopsApp: string | null;
@@ -156,6 +163,8 @@ export interface DbInfo {
   name: string;
   engine: DbEngineId;
   engineLabel: string;
+  plan: ServicePlanId;
+  planLabel: string;
   state: string;
   host: string;
   port: number;
@@ -172,6 +181,8 @@ export interface CacheInfo {
   name: string;
   engine: CacheEngineId;
   engineLabel: string;
+  plan: ServicePlanId;
+  planLabel: string;
   state: string;
   host: string;
   port: number;
@@ -576,10 +587,12 @@ export class ComputeManager {
       image: string;
       port: number | null;
       env: Record<string, string>;
+      plan?: ServicePlanId;
       metricsPort: number | null;
       metricsPath: string;
     }>(svc);
     const ws = svc.Spec.Labels?.[SM4RT_WS_LABEL] ?? '';
+    const plan: ServicePlanId = m.plan && isServicePlanId(m.plan) ? m.plan : 'small';
     return {
       name: m.name,
       image: m.image,
@@ -589,6 +602,8 @@ export class ComputeManager {
       state,
       url: m.port ? this.taskUrl(ws, m.name) : null,
       env: m.env ?? {},
+      plan,
+      planLabel: TASK_PLANS[plan].label,
       metricsPort: m.metricsPort ?? null,
       metricsPath: m.metricsPath ?? '/metrics',
       gitopsApp: svc.Spec.Labels?.['sm4rt.gitops.app'] ?? null,
@@ -619,6 +634,7 @@ export class ComputeManager {
       port?: number | null;
       env?: Record<string, string>;
       replicas?: number;
+      plan?: string;
       cpus?: number;
       memoryMb?: number;
       metricsPort?: number | null;
@@ -629,6 +645,9 @@ export class ComputeManager {
   ): Promise<TaskInfo> {
     if (!isValidResourceName(input.name)) throw new ComputeError(400, 'invalid task name');
     if (!isValidImageRef(input.image)) throw new ComputeError(400, 'invalid image reference');
+    if (input.plan !== undefined && !isServicePlanId(input.plan)) {
+      throw new ComputeError(400, `unknown plan: ${input.plan}`);
+    }
     const port = input.port ?? null;
     if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
       throw new ComputeError(400, 'invalid port');
@@ -657,6 +676,7 @@ export class ComputeManager {
       port: number | null;
       env?: Record<string, string>;
       replicas: number;
+      plan?: string;
       cpus?: number;
       memoryMb?: number;
       metricsPort?: number | null;
@@ -674,11 +694,13 @@ export class ComputeManager {
         if (!userKeys.has(e.split('=')[0]!)) env.push(e);
       }
     }
+    const plan: ServicePlanId = input.plan && isServicePlanId(input.plan) ? input.plan : 'small';
     const meta = {
       name: input.name,
       image: input.image,
       port: input.port,
       env: input.env ?? {},
+      plan,
       metricsPort: input.metricsPort ?? null,
       metricsPath: input.metricsPath ?? '/metrics',
     };
@@ -693,8 +715,8 @@ export class ComputeManager {
     if (input.port) {
       Object.assign(labels, this.caddyLabels(this.publicHost(`${input.name}.${ws}`), input.port));
     }
-    const cpus = input.cpus ?? 0.5;
-    const memoryMb = input.memoryMb ?? 512;
+    const cpus = input.cpus ?? TASK_PLANS[plan].cpus;
+    const memoryMb = input.memoryMb ?? TASK_PLANS[plan].memoryMb;
     return {
       Name: serviceName,
       Labels: labels,
@@ -735,6 +757,7 @@ export class ComputeManager {
       port?: number | null;
       env?: Record<string, string>;
       replicas?: number;
+      plan?: string;
       metricsPort?: number | null;
       metricsPath?: string;
       gitopsRev?: string;
@@ -746,11 +769,15 @@ export class ComputeManager {
       image: string;
       port: number | null;
       env: Record<string, string>;
+      plan?: ServicePlanId;
       metricsPort: number | null;
       metricsPath: string;
     }>(svc);
     if (patch.image !== undefined && !isValidImageRef(patch.image)) {
       throw new ComputeError(400, 'invalid image reference');
+    }
+    if (patch.plan !== undefined && !isServicePlanId(patch.plan)) {
+      throw new ComputeError(400, `unknown plan: ${patch.plan}`);
     }
     const merged = {
       name,
@@ -758,6 +785,7 @@ export class ComputeManager {
       port: patch.port !== undefined ? patch.port : m.port,
       env: patch.env ?? m.env ?? {},
       replicas: patch.replicas ?? this.desiredReplicas(svc),
+      plan: patch.plan ?? m.plan,
       metricsPort: patch.metricsPort !== undefined ? patch.metricsPort : m.metricsPort,
       metricsPath: patch.metricsPath ?? m.metricsPath ?? '/metrics',
       gitopsApp: svc.Spec.Labels?.['sm4rt.gitops.app'] ?? undefined,
@@ -809,15 +837,19 @@ export class ComputeManager {
       name: string;
       engine: DbEngineId;
       pass: string;
+      plan?: ServicePlanId;
       externalPort: number | null;
     }>(svc);
     const eng = DB_ENGINES[m.engine];
     const host = svc.Spec.Name;
     const proto = m.engine === 'postgres-16' ? 'postgresql' : 'mysql';
+    const plan: ServicePlanId = m.plan && isServicePlanId(m.plan) ? m.plan : 'small';
     return {
       name: m.name,
       engine: m.engine,
       engineLabel: eng?.label ?? m.engine,
+      plan,
+      planLabel: DB_PLANS[plan].label,
       state,
       host,
       port: eng?.port ?? 5432,
@@ -842,10 +874,14 @@ export class ComputeManager {
 
   async createDatabase(
     ws: string,
-    input: { name: string; engine: string; external?: boolean },
+    input: { name: string; engine: string; plan?: string; external?: boolean },
   ): Promise<DbInfo> {
     if (!isValidResourceName(input.name)) throw new ComputeError(400, 'invalid database name');
     if (!isDbEngineId(input.engine)) throw new ComputeError(400, `unknown engine: ${input.engine}`);
+    if (input.plan !== undefined && !isServicePlanId(input.plan)) {
+      throw new ComputeError(400, `unknown plan: ${input.plan}`);
+    }
+    const plan: ServicePlanId = input.plan && isServicePlanId(input.plan) ? input.plan : 'small';
     await this.ensureNetwork();
     const serviceName = this.dbService(ws, input.name);
     if (await this.getService(serviceName)) {
@@ -881,7 +917,7 @@ export class ComputeManager {
         `MARIADB_PASSWORD=${pass}`,
       );
     }
-    const meta = { name: input.name, engine: input.engine, pass, externalPort };
+    const meta = { name: input.name, engine: input.engine, pass, plan, externalPort };
     const volumeName = `${serviceName}-data`;
     const spec: Docker.CreateServiceOptions = {
       Name: serviceName,
@@ -905,7 +941,12 @@ export class ComputeManager {
             } as unknown as Docker.MountSettings,
           ],
         },
-        Resources: { Limits: { NanoCPUs: cpusToNano(1), MemoryBytes: mbToBytes(1024) } },
+        Resources: {
+          Limits: {
+            NanoCPUs: cpusToNano(DB_PLANS[plan].cpus),
+            MemoryBytes: mbToBytes(DB_PLANS[plan].memoryMb),
+          },
+        },
         RestartPolicy: { Condition: 'any', Delay: 5_000_000_000 },
         Networks: [{ Target: NETWORK_NAME, Aliases: [serviceName] }],
       },
@@ -940,14 +981,18 @@ export class ComputeManager {
       name: string;
       engine: CacheEngineId;
       pass: string;
+      plan?: ServicePlanId;
       externalPort: number | null;
     }>(svc);
     const eng = CACHE_ENGINES[m.engine];
     const host = svc.Spec.Name;
+    const plan: ServicePlanId = m.plan && isServicePlanId(m.plan) ? m.plan : 'small';
     return {
       name: m.name,
       engine: m.engine,
       engineLabel: eng?.label ?? m.engine,
+      plan,
+      planLabel: CACHE_PLANS[plan].label,
       state,
       host,
       port: eng?.port ?? 6379,
@@ -970,12 +1015,16 @@ export class ComputeManager {
 
   async createCache(
     ws: string,
-    input: { name: string; engine: string; external?: boolean },
+    input: { name: string; engine: string; plan?: string; external?: boolean },
   ): Promise<CacheInfo> {
     if (!isValidResourceName(input.name)) throw new ComputeError(400, 'invalid cache name');
     if (!isCacheEngineId(input.engine)) {
       throw new ComputeError(400, `unknown engine: ${input.engine}`);
     }
+    if (input.plan !== undefined && !isServicePlanId(input.plan)) {
+      throw new ComputeError(400, `unknown plan: ${input.plan}`);
+    }
+    const plan: ServicePlanId = input.plan && isServicePlanId(input.plan) ? input.plan : 'small';
     await this.ensureNetwork();
     const serviceName = this.cacheService(ws, input.name);
     if (await this.getService(serviceName)) {
@@ -988,7 +1037,7 @@ export class ComputeManager {
       externalPort = allocatePort(await this.usedPublishedPorts(), CACHE_PORT_RANGE);
       if (!externalPort) throw new ComputeError(503, 'no free cache ports on the cluster');
     }
-    const meta = { name: input.name, engine: input.engine, pass, externalPort };
+    const meta = { name: input.name, engine: input.engine, pass, plan, externalPort };
     await this.docker.createService({
       Name: serviceName,
       Labels: {
@@ -1007,7 +1056,12 @@ export class ComputeManager {
             [SM4RT_NAME_LABEL]: input.name,
           },
         },
-        Resources: { Limits: { NanoCPUs: cpusToNano(0.5), MemoryBytes: mbToBytes(512) } },
+        Resources: {
+          Limits: {
+            NanoCPUs: cpusToNano(CACHE_PLANS[plan].cpus),
+            MemoryBytes: mbToBytes(CACHE_PLANS[plan].memoryMb),
+          },
+        },
         RestartPolicy: { Condition: 'any', Delay: 5_000_000_000 },
         Networks: [{ Target: NETWORK_NAME, Aliases: [serviceName] }],
       },

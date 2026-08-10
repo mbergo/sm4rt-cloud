@@ -101,6 +101,7 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
         port: b?.port == null ? null : Number(b.port),
         env: (b?.env as Record<string, string>) ?? undefined,
         replicas: b?.replicas == null ? undefined : Number(b.replicas),
+        plan: typeof b?.plan === 'string' ? b.plan : undefined,
         cpus: b?.cpus == null ? undefined : Number(b.cpus),
         memoryMb: b?.memoryMb == null ? undefined : Number(b.memoryMb),
         metricsPort: b?.metricsPort == null ? null : Number(b.metricsPort),
@@ -119,6 +120,7 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
         ...(b?.port !== undefined ? { port: b.port == null ? null : Number(b.port) } : {}),
         ...(b?.env !== undefined ? { env: b.env as Record<string, string> } : {}),
         ...(b?.replicas !== undefined ? { replicas: Number(b.replicas) } : {}),
+        ...(typeof b?.plan === 'string' ? { plan: b.plan } : {}),
         ...(b?.metricsPort !== undefined
           ? { metricsPort: b.metricsPort == null ? null : Number(b.metricsPort) }
           : {}),
@@ -151,10 +153,11 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
   app.post(
     `${base}/databases`,
     route(async (ws, req, reply) => {
-      const b = req.body as { name?: string; engine?: string; external?: boolean };
+      const b = req.body as { name?: string; engine?: string; plan?: string; external?: boolean };
       const db = await compute.createDatabase(ws, {
         name: b?.name ?? '',
         engine: b?.engine ?? '',
+        plan: typeof b?.plan === 'string' ? b.plan : undefined,
         external: Boolean(b?.external),
       });
       return reply.code(201).send(db);
@@ -181,10 +184,11 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
   app.post(
     `${base}/caches`,
     route(async (ws, req, reply) => {
-      const b = req.body as { name?: string; engine?: string; external?: boolean };
+      const b = req.body as { name?: string; engine?: string; plan?: string; external?: boolean };
       const cache = await compute.createCache(ws, {
         name: b?.name ?? '',
         engine: b?.engine ?? '',
+        plan: typeof b?.plan === 'string' ? b.plan : undefined,
         external: Boolean(b?.external),
       });
       return reply.code(201).send(cache);

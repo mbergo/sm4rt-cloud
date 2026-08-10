@@ -151,6 +151,7 @@ function Dashboard({
         />
         <Console
           name={selected}
+          cluster={cluster}
           onBack={() => {
             setSelected(null);
             refresh();

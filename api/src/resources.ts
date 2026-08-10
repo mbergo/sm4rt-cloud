@@ -1243,8 +1243,14 @@ export class ResourceGateway {
           };
         }
         if (action === 'putObject') {
+          const base64 = str('contentBase64');
           await s3.send(
-            new PutObjectCommand({ Bucket: id, Key: str('key'), Body: str('content') }),
+            new PutObjectCommand({
+              Bucket: id,
+              Key: str('key'),
+              Body: base64 ? Buffer.from(base64, 'base64') : str('content'),
+              ...(str('contentType') ? { ContentType: str('contentType') } : {}),
+            }),
           );
           return { ok: true };
         }
@@ -1252,6 +1258,18 @@ export class ResourceGateway {
           const out = await s3.send(new GetObjectCommand({ Bucket: id, Key: str('key') }));
           const text = (await out.Body?.transformToString()) ?? '';
           return { key: str('key'), content: text.slice(0, 10_000) };
+        }
+        if (action === 'downloadObject') {
+          const out = await s3.send(new GetObjectCommand({ Bucket: id, Key: str('key') }));
+          const bytes = (await out.Body?.transformToByteArray()) ?? new Uint8Array();
+          if (bytes.byteLength > 25 * 1024 * 1024) {
+            throw new Error('object larger than 25 MiB — use the AWS CLI to download it');
+          }
+          return {
+            key: str('key'),
+            contentBase64: Buffer.from(bytes).toString('base64'),
+            contentType: out.ContentType ?? 'application/octet-stream',
+          };
         }
         if (action === 'deleteObject') {
           await s3.send(new DeleteObjectCommand({ Bucket: id, Key: str('key') }));

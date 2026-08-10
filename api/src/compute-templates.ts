@@ -30,6 +30,32 @@ export const VM_PLANS: Record<VmPlanId, { label: string; cpus: number; memoryMb:
   large: { label: '4 vCPU · 4 GB', cpus: 4, memoryMb: 4096 },
 };
 
+// Sizing plans for managed services (databases, caches, container tasks).
+export type ServicePlanId = 'micro' | 'small' | 'medium' | 'large';
+
+export const DB_PLANS: Record<ServicePlanId, { label: string; cpus: number; memoryMb: number }> = {
+  micro: { label: '0.5 vCPU · 512 MB', cpus: 0.5, memoryMb: 512 },
+  small: { label: '1 vCPU · 1 GB', cpus: 1, memoryMb: 1024 },
+  medium: { label: '2 vCPU · 2 GB', cpus: 2, memoryMb: 2048 },
+  large: { label: '4 vCPU · 4 GB', cpus: 4, memoryMb: 4096 },
+};
+
+export const CACHE_PLANS: Record<ServicePlanId, { label: string; cpus: number; memoryMb: number }> =
+  {
+    micro: { label: '0.25 vCPU · 256 MB', cpus: 0.25, memoryMb: 256 },
+    small: { label: '0.5 vCPU · 512 MB', cpus: 0.5, memoryMb: 512 },
+    medium: { label: '1 vCPU · 1 GB', cpus: 1, memoryMb: 1024 },
+    large: { label: '2 vCPU · 2 GB', cpus: 2, memoryMb: 2048 },
+  };
+
+export const TASK_PLANS: Record<ServicePlanId, { label: string; cpus: number; memoryMb: number }> =
+  {
+    micro: { label: '0.25 vCPU · 256 MB', cpus: 0.25, memoryMb: 256 },
+    small: { label: '0.5 vCPU · 512 MB', cpus: 0.5, memoryMb: 512 },
+    medium: { label: '1 vCPU · 1 GB', cpus: 1, memoryMb: 1024 },
+    large: { label: '2 vCPU · 2 GB', cpus: 2, memoryMb: 2048 },
+  };
+
 export const DB_ENGINES: Record<
   DbEngineId,
   { image: string; label: string; port: number; dataDir: string; user: string; database: string }
@@ -71,6 +97,9 @@ export function isVmImageId(v: string): v is VmImageId {
 }
 export function isVmPlanId(v: string): v is VmPlanId {
   return v in VM_PLANS;
+}
+export function isServicePlanId(v: string): v is ServicePlanId {
+  return v in DB_PLANS;
 }
 export function isDbEngineId(v: string): v is DbEngineId {
   return v in DB_ENGINES;

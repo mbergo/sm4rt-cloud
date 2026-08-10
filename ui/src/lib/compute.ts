@@ -21,6 +21,30 @@ export const VM_PLANS = [
 ] as const;
 export type VmPlanId = (typeof VM_PLANS)[number]['id'];
 
+export const SERVICE_PLANS = ['micro', 'small', 'medium', 'large'] as const;
+export type ServicePlanId = (typeof SERVICE_PLANS)[number];
+
+export const DB_PLANS = [
+  { id: 'micro', label: 'Micro — 0.5 vCPU · 512 MB' },
+  { id: 'small', label: 'Small — 1 vCPU · 1 GB' },
+  { id: 'medium', label: 'Medium — 2 vCPU · 2 GB' },
+  { id: 'large', label: 'Large — 4 vCPU · 4 GB' },
+] as const;
+
+export const CACHE_PLANS = [
+  { id: 'micro', label: 'Micro — 0.25 vCPU · 256 MB' },
+  { id: 'small', label: 'Small — 0.5 vCPU · 512 MB' },
+  { id: 'medium', label: 'Medium — 1 vCPU · 1 GB' },
+  { id: 'large', label: 'Large — 2 vCPU · 2 GB' },
+] as const;
+
+export const TASK_PLANS = [
+  { id: 'micro', label: 'Micro — 0.25 vCPU · 256 MB' },
+  { id: 'small', label: 'Small — 0.5 vCPU · 512 MB' },
+  { id: 'medium', label: 'Medium — 1 vCPU · 1 GB' },
+  { id: 'large', label: 'Large — 2 vCPU · 2 GB' },
+] as const;
+
 export const DB_ENGINES = [
   { id: 'postgres-16', label: 'PostgreSQL 16', port: 5432 },
   { id: 'mysql-8', label: 'MySQL 8', port: 3306 },
@@ -65,6 +89,8 @@ export interface TaskInfo {
   state: string;
   url: string | null;
   env: Record<string, string>;
+  plan: ServicePlanId;
+  planLabel: string;
   metricsPort: number | null;
   metricsPath: string;
   gitopsApp: string | null;
@@ -76,6 +102,8 @@ export interface DbInfo {
   name: string;
   engine: DbEngineId;
   engineLabel: string;
+  plan: ServicePlanId;
+  planLabel: string;
   state: string;
   host: string;
   port: number;
@@ -92,6 +120,8 @@ export interface CacheInfo {
   name: string;
   engine: CacheEngineId;
   engineLabel: string;
+  plan: ServicePlanId;
+  planLabel: string;
   state: string;
   host: string;
   port: number;
@@ -202,6 +232,7 @@ export const createTask = (
     port?: number;
     env?: Record<string, string>;
     replicas?: number;
+    plan?: ServicePlanId;
     metricsPort?: number;
     metricsPath?: string;
   },
@@ -231,7 +262,7 @@ export const taskLogs = (ws: string, task: string, tail = 200) =>
 export const listDatabases = (ws: string) => request<{ databases: DbInfo[] }>(`${base(ws)}/databases`);
 export const createDatabase = (
   ws: string,
-  body: { name: string; engine: DbEngineId; external?: boolean },
+  body: { name: string; engine: DbEngineId; plan?: ServicePlanId; external?: boolean },
 ) => request<DbInfo>(`${base(ws)}/databases`, { method: 'POST', body: JSON.stringify(body) });
 export const deleteDatabase = (ws: string, db: string) =>
   request<void>(`${base(ws)}/databases/${db}`, { method: 'DELETE' });
@@ -243,7 +274,7 @@ export const databaseLogs = (ws: string, db: string, tail = 200) =>
 export const listCaches = (ws: string) => request<{ caches: CacheInfo[] }>(`${base(ws)}/caches`);
 export const createCache = (
   ws: string,
-  body: { name: string; engine: CacheEngineId; external?: boolean },
+  body: { name: string; engine: CacheEngineId; plan?: ServicePlanId; external?: boolean },
 ) => request<CacheInfo>(`${base(ws)}/caches`, { method: 'POST', body: JSON.stringify(body) });
 export const deleteCache = (ws: string, cache: string) =>
   request<void>(`${base(ws)}/caches/${cache}`, { method: 'DELETE' });
