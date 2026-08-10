@@ -559,7 +559,7 @@ function Overview({
           </p>
         </div>
         <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
-          <p className="text-[11px] uppercase tracking-wider text-stone-500">CPU (workspace)</p>
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">CPU</p>
           <div className="mt-1.5 flex items-center justify-between gap-2">
             <span className="text-lg font-semibold tabular-nums text-stone-100">
               {currentCpu === null ? '–' : formatCpu(currentCpu)}
@@ -568,7 +568,7 @@ function Overview({
           </div>
         </div>
         <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
-          <p className="text-[11px] uppercase tracking-wider text-stone-500">Memory (workspace)</p>
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">Memory</p>
           <div className="mt-1.5 flex items-center justify-between gap-2">
             <span className="text-lg font-semibold tabular-nums text-stone-100">
               {currentMem === null ? '–' : formatMemory(currentMem)}
@@ -1114,11 +1114,15 @@ function Sparkline({ values, max, stroke }: { values: number[]; max: number; str
   }
   const safeMax = Math.max(max, 1e-9);
   const step = width / (values.length - 1);
-  const points = values
-    .map((value, index) => `${(index * step).toFixed(1)},${(height - 2 - (Math.min(value / safeMax, 1) * (height - 4))).toFixed(1)}`)
-    .join(' ');
+  const coords = values.map((value, index) => [
+    Number((index * step).toFixed(1)),
+    Number((height - 2 - (Math.min(value / safeMax, 1) * (height - 4))).toFixed(1)),
+  ]);
+  const points = coords.map(([x, y]) => `${x},${y}`).join(' ');
+  const area = `0,${height} ${points} ${width},${height}`;
   return (
     <svg width={width} height={height} className="shrink-0">
+      <polygon points={area} fill={stroke} opacity="0.12" />
       <polyline points={points} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinejoin="round" />
     </svg>
   );
@@ -1127,7 +1131,8 @@ function Sparkline({ values, max, stroke }: { values: number[]; max: number; str
 function formatMemory(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
   if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
-  return `${Math.round(bytes / 1024)} KiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${Math.round(bytes)} B`;
 }
 
 function formatCpu(milli: number): string {
@@ -1275,7 +1280,7 @@ function MonitoringView({ instance }: { instance: string }) {
                     </td>
                     <td className="px-4 py-2.5 tabular-nums text-stone-300">{formatMemory(svc.memoryBytes)}</td>
                     <td className="px-4 py-2.5">
-                      <Sparkline values={history.mem} max={maxMem} stroke="#34d399" />
+                      <Sparkline values={history.mem} max={maxMem} stroke="#38bdf8" />
                     </td>
                     <td className="px-4 py-2.5 tabular-nums text-stone-400">{svc.pods}</td>
                   </tr>
@@ -1351,8 +1356,18 @@ function ServicesCatalog({
   }
 
   if (!services) {
+    if (error) {
+      return <p className="text-sm text-stone-500">error: {error}</p>;
+    }
     return (
-      <p className="text-sm text-stone-500">{error ? `error: ${error}` : 'loading services…'}</p>
+      <div className="space-y-6">
+        <div className="h-12 w-64 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-28 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+          ))}
+        </div>
+      </div>
     );
   }
 
