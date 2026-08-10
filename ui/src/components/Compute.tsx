@@ -31,8 +31,11 @@ import {
 import { ApiError } from '../lib/api';
 import {
   CACHE_ENGINES,
+  CACHE_PLANS,
   DB_ENGINES,
+  DB_PLANS,
   DNS_TYPES,
+  TASK_PLANS,
   VM_IMAGES,
   VM_PLANS,
   addGitopsApp,
@@ -85,6 +88,7 @@ import {
   type GatewayRoute,
   type GitopsApp,
   type ObsInfo,
+  type ServicePlanId,
   type TaskInfo,
   type VmImageId,
   type VmInfo,
@@ -584,6 +588,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
   const [image, setImage] = useState('');
   const [port, setPort] = useState('');
   const [replicas, setReplicas] = useState('1');
+  const [plan, setPlan] = useState<ServicePlanId>('small');
   const [envText, setEnvText] = useState('');
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -598,6 +603,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
         name: name.trim(),
         image: image.trim(),
         replicas: Number(replicas) || 1,
+        plan,
       };
       if (port.trim()) body.port = Number(port);
       const env = parseEnvText(envText);
@@ -657,7 +663,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       <CreatePanel open={showCreate}>
-        <div className="grid gap-3 sm:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-5">
           <label>
             <Label>Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="api" />
@@ -673,6 +679,16 @@ export function ContainersPage({ instance, notify }: PageProps) {
           <label>
             <Label>Replicas</Label>
             <Input value={replicas} onChange={(e) => setReplicas(e.target.value)} placeholder="1" />
+          </label>
+          <label>
+            <Label>Size</Label>
+            <Select value={plan} onChange={(e) => setPlan(e.target.value as ServicePlanId)}>
+              {TASK_PLANS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
           </label>
         </div>
         <label className="mt-3 block">
@@ -704,6 +720,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
                 <Th>Name</Th>
                 <Th>State</Th>
                 <Th>Image</Th>
+                <Th>Size</Th>
                 <Th>Replicas</Th>
                 <Th>URL</Th>
                 <Th>Created</Th>
@@ -726,6 +743,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
                   </Td>
                   <Td><StateDot state={t.state} /></Td>
                   <Td><Mono>{t.image}</Mono></Td>
+                  <Td className="text-stone-400">{t.planLabel}</Td>
                   <Td>
                     {t.runningReplicas}/{t.replicas}
                   </Td>
@@ -831,6 +849,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
   const [engine, setEngine] = useState<DbEngineId>('postgres-16');
+  const [plan, setPlan] = useState<ServicePlanId>('small');
   const [external, setExternal] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -841,7 +860,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
   const submit = async () => {
     setBusy(true);
     try {
-      const db = await createDatabase(instance, { name: name.trim(), engine, external });
+      const db = await createDatabase(instance, { name: name.trim(), engine, plan, external });
       notify(`Database ${db.name} provisioning`);
       setName('');
       setShowCreate(false);
@@ -881,7 +900,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       <CreatePanel open={showCreate}>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-4">
           <label>
             <Label>Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="app-db" />
@@ -892,6 +911,16 @@ export function DatabasesPage({ instance, notify }: PageProps) {
               {DB_ENGINES.map((e2) => (
                 <option key={e2.id} value={e2.id}>
                   {e2.label}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label>
+            <Label>Size</Label>
+            <Select value={plan} onChange={(e) => setPlan(e.target.value as ServicePlanId)}>
+              {DB_PLANS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
                 </option>
               ))}
             </Select>
@@ -925,6 +954,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
                 <Th>Name</Th>
                 <Th>State</Th>
                 <Th>Engine</Th>
+                <Th>Size</Th>
                 <Th>Endpoint</Th>
                 <Th>Created</Th>
               </tr>
@@ -939,6 +969,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
                   <Td className="font-medium text-stone-100">{db.name}</Td>
                   <Td><StateDot state={db.state} /></Td>
                   <Td>{db.engineLabel}</Td>
+                  <Td className="text-stone-400">{db.planLabel}</Td>
                   <Td>
                     <Mono>
                       {db.externalHost && db.externalPort
@@ -985,6 +1016,7 @@ export function CachesPage({ instance, notify }: PageProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
   const [engine, setEngine] = useState<CacheEngineId>('redis-7');
+  const [plan, setPlan] = useState<ServicePlanId>('small');
   const [external, setExternal] = useState(true);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -995,7 +1027,7 @@ export function CachesPage({ instance, notify }: PageProps) {
   const submit = async () => {
     setBusy(true);
     try {
-      const cache = await createCache(instance, { name: name.trim(), engine, external });
+      const cache = await createCache(instance, { name: name.trim(), engine, plan, external });
       notify(`Cache ${cache.name} provisioning`);
       setName('');
       setShowCreate(false);
@@ -1035,7 +1067,7 @@ export function CachesPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       <CreatePanel open={showCreate}>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-4">
           <label>
             <Label>Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="sessions" />
@@ -1046,6 +1078,16 @@ export function CachesPage({ instance, notify }: PageProps) {
               {CACHE_ENGINES.map((e2) => (
                 <option key={e2.id} value={e2.id}>
                   {e2.label}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label>
+            <Label>Size</Label>
+            <Select value={plan} onChange={(e) => setPlan(e.target.value as ServicePlanId)}>
+              {CACHE_PLANS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
                 </option>
               ))}
             </Select>
@@ -1079,6 +1121,7 @@ export function CachesPage({ instance, notify }: PageProps) {
                 <Th>Name</Th>
                 <Th>State</Th>
                 <Th>Engine</Th>
+                <Th>Size</Th>
                 <Th>Endpoint</Th>
                 <Th>Created</Th>
               </tr>
@@ -1093,6 +1136,7 @@ export function CachesPage({ instance, notify }: PageProps) {
                   <Td className="font-medium text-stone-100">{c.name}</Td>
                   <Td><StateDot state={c.state} /></Td>
                   <Td>{c.engineLabel}</Td>
+                  <Td className="text-stone-400">{c.planLabel}</Td>
                   <Td>
                     <Mono>
                       {c.externalHost && c.externalPort

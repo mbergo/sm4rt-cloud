@@ -1,6 +1,7 @@
 import {
   Activity,
   AlarmClock,
+  AlertTriangle,
   Archive,
   ArrowLeft,
   AudioWaveform,
@@ -9,9 +10,11 @@ import {
   Boxes,
   CalendarClock,
   Cat,
+  CheckCircle2,
   Container,
   Cylinder,
   Database,
+  Download,
   Droplets,
   Eye,
   ExternalLink,
@@ -92,6 +95,7 @@ import {
   startService,
   stopService,
   type AgentRun,
+  type ClusterInfo,
   type InstanceDetail,
   type InstanceMetrics,
   type RealServiceId,
@@ -119,6 +123,7 @@ import {
   ServersPage,
 } from './Compute';
 import { computeSummary } from '../lib/compute';
+import ClusterBar from './ClusterBar';
 
 type SectionId =
   | 'overview'
@@ -170,6 +175,32 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'monitoring', label: 'Monitoring', icon: Gauge, group: 'Diagnostics' },
   { id: 'logs-instance', label: 'Instance logs', icon: ScrollText, group: 'Diagnostics' },
 ];
+
+const GROUP_ICON_COLOR: Record<string, string> = {
+  'Storage & data': 'text-sky-400',
+  Messaging: 'text-violet-400',
+  Compute: 'text-amber-400',
+  Analytics: 'text-fuchsia-400',
+  'Web & edge': 'text-teal-400',
+  Platform: 'text-emerald-400',
+  'Security & identity': 'text-rose-400',
+  Automation: 'text-orange-400',
+  'All services': 'text-cyan-400',
+  Diagnostics: 'text-stone-400',
+};
+
+const GROUP_TITLE_COLOR: Record<string, string> = {
+  'Storage & data': 'text-sky-500/80',
+  Messaging: 'text-violet-500/80',
+  Compute: 'text-amber-500/80',
+  Analytics: 'text-fuchsia-500/80',
+  'Web & edge': 'text-teal-500/80',
+  Platform: 'text-emerald-500/80',
+  'Security & identity': 'text-rose-500/80',
+  Automation: 'text-orange-500/80',
+  'All services': 'text-cyan-500/80',
+  Diagnostics: 'text-stone-500',
+};
 
 const CATEGORY_META: Record<ServiceCategory, string> = {
   messaging: 'Streaming & messaging',
@@ -240,10 +271,12 @@ function useRegion(): Region {
 
 export default function Console({
   name,
+  cluster,
   onBack,
   notify,
 }: {
   name: string;
+  cluster?: ClusterInfo | null;
   onBack: () => void;
   notify: (message: string, tone?: 'ok' | 'err') => void;
 }) {
@@ -287,7 +320,9 @@ export default function Console({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl gap-6 px-6 py-6">
+    <div className="mx-auto w-full max-w-7xl px-6 py-6">
+      {cluster !== undefined ? <ClusterBar cluster={cluster} /> : null}
+      <div className="flex w-full gap-6">
       <aside className="w-56 shrink-0">
         <button
           type="button"
@@ -324,13 +359,18 @@ export default function Console({
           {groups.map((group) => (
             <div key={group.title ?? 'root'}>
               {group.title ? (
-                <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-stone-600">
+                <p
+                  className={`px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest ${GROUP_TITLE_COLOR[group.title] ?? 'text-stone-600'}`}
+                >
                   {group.title}
                 </p>
               ) : null}
               <div className="space-y-0.5">
                 {group.items.map((item) => {
                   const active = section === item.id;
+                  const iconColor = group.title
+                    ? (GROUP_ICON_COLOR[group.title] ?? 'text-stone-400')
+                    : 'text-stone-400';
                   return (
                     <button
                       key={item.id}
@@ -342,7 +382,9 @@ export default function Console({
                           : 'text-stone-400 hover:bg-white/5 hover:text-stone-100'
                       }`}
                     >
-                      <item.icon className="h-4 w-4 shrink-0" />
+                      <item.icon
+                        className={`h-4 w-4 shrink-0 ${active ? 'text-amber-300' : iconColor}`}
+                      />
                       {item.label}
                     </button>
                   );
@@ -394,6 +436,7 @@ export default function Console({
           </RegionContext.Provider>
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -412,6 +455,35 @@ function Overview({
   const [snippet, setSnippet] = useState('cli');
   const [confirming, setConfirming] = useState(false);
   const [summary, setSummary] = useState<Record<string, number> | null>(null);
+  const [services, setServices] = useState<RealServiceInfo[] | null>(null);
+  const [cpuHistory, setCpuHistory] = useState<number[]>([]);
+  const [memHistory, setMemHistory] = useState<number[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      listServices(detail.name)
+        .then((data) => {
+          if (alive) setServices(data.services);
+        })
+        .catch(() => undefined);
+      getInstanceMetrics(detail.name)
+        .then((data) => {
+          if (!alive) return;
+          const cpu = data.services.reduce((sum, svc) => sum + svc.cpuMilli, 0);
+          const mem = data.services.reduce((sum, svc) => sum + svc.memoryBytes, 0);
+          setCpuHistory((prev) => [...prev.slice(-(METRIC_HISTORY_LIMIT - 1)), cpu]);
+          setMemHistory((prev) => [...prev.slice(-(METRIC_HISTORY_LIMIT - 1)), mem]);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = setInterval(load, 10000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [detail.name]);
 
   useEffect(() => {
     let alive = true;
@@ -443,8 +515,108 @@ function Overview({
     { key: 'devops', label: 'DevOps', section: 'devops', icon: GitBranch },
   ];
 
+  const runningServices = services?.filter((svc) => svc.status === 'running') ?? [];
+  const errorServices = services?.filter((svc) => svc.status === 'error') ?? [];
+  const currentCpu = cpuHistory.length > 0 ? cpuHistory[cpuHistory.length - 1] : null;
+  const currentMem = memHistory.length > 0 ? memHistory[memHistory.length - 1] : null;
+  const cpuMax = Math.max(...cpuHistory, 1);
+  const memMax = Math.max(...memHistory, 1);
+  const alerts: string[] = [];
+  if (detail.status !== 'running') alerts.push(`Environment status is "${detail.status}"`);
+  for (const svc of errorServices) {
+    alerts.push(`${svc.label} is in error${svc.statusDetail ? `: ${svc.statusDetail}` : ''}`);
+  }
+
   return (
     <div className="space-y-6">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">Environment</p>
+          <div className="mt-1.5 flex items-center gap-2">
+            {detail.status === 'running' ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 text-amber-400" />
+            )}
+            <span className="text-lg font-semibold capitalize text-stone-100">{detail.status}</span>
+          </div>
+          <p className="mt-1 text-[11px] text-stone-500">expires {timeUntil(detail.expiresAt)}</p>
+        </div>
+        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">Services healthy</p>
+          <div className="mt-1.5 flex items-baseline gap-1.5">
+            <span
+              className={`text-lg font-semibold tabular-nums ${errorServices.length > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
+            >
+              {services === null ? '–' : runningServices.length}
+            </span>
+            <span className="text-xs text-stone-500">
+              running{errorServices.length > 0 ? ` · ${errorServices.length} error` : ''}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-stone-500">
+            {services === null ? 'loading…' : `${services.length} in catalog`}
+          </p>
+        </div>
+        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">CPU (workspace)</p>
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="text-lg font-semibold tabular-nums text-stone-100">
+              {currentCpu === null ? '–' : formatCpu(currentCpu)}
+            </span>
+            <Sparkline values={cpuHistory} max={cpuMax} stroke="#fbbf24" />
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-stone-500">Memory (workspace)</p>
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="text-lg font-semibold tabular-nums text-stone-100">
+              {currentMem === null ? '–' : formatMemory(currentMem)}
+            </span>
+            <Sparkline values={memHistory} max={memMax} stroke="#38bdf8" />
+          </div>
+        </div>
+      </section>
+
+      {alerts.length > 0 ? (
+        <section className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+            <h3 className="text-sm font-semibold text-amber-200">System alerts</h3>
+          </div>
+          <ul className="mt-1.5 space-y-1 pl-6 text-xs text-amber-100/90">
+            {alerts.map((alert) => (
+              <li key={alert} className="list-disc">
+                {alert}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {services !== null && services.some((svc) => svc.status !== 'stopped') ? (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+            Service health
+          </h3>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {services
+              .filter((svc) => svc.status !== 'stopped')
+              .map((svc) => (
+                <button
+                  key={svc.id}
+                  type="button"
+                  onClick={() => onNavigate('services')}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition hover:border-amber-400/40 ${SERVICE_STATUS_STYLE[svc.status]}`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${SERVICE_STATUS_DOT[svc.status]}`} />
+                  {svc.label}
+                </button>
+              ))}
+          </div>
+        </section>
+      ) : null}
+
       {summary ? (
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
@@ -1407,14 +1579,31 @@ function RealServiceView({
             Endpoints
           </h3>
           <div className="mt-2 space-y-2">
-            {info.endpoints.map((endpoint) => (
+            {[...info.endpoints]
+              .sort((a, b) => {
+                const aPub = a.value.startsWith('https://') ? 0 : 1;
+                const bPub = b.value.startsWith('https://') ? 0 : 1;
+                return aPub - bPub;
+              })
+              .map((endpoint) => (
               <div
                 key={endpoint.label}
                 className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5"
               >
                 <div className="min-w-0">
                   <p className="text-xs text-stone-500">{endpoint.label}</p>
-                  <p className="truncate font-mono text-xs text-stone-200">{endpoint.value}</p>
+                  {endpoint.value.startsWith('https://') ? (
+                    <a
+                      href={endpoint.value}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate font-mono text-xs text-amber-300 hover:underline"
+                    >
+                      {endpoint.value.replace('https://', '')}
+                    </a>
+                  ) : (
+                    <p className="truncate font-mono text-xs text-stone-200">{endpoint.value}</p>
+                  )}
                 </div>
                 <CopyButton value={endpoint.value} />
               </div>
@@ -1940,12 +2129,14 @@ function ResultBox({ children }: { children: ReactNode }) {
 
 function BucketObjects({ instance, item, notify }: DetailProps) {
   const region = useRegion();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [objects, setObjects] = useState<
     { key?: string; size?: number; lastModified?: string }[] | null
   >(null);
   const [error, setError] = useState('');
   const [key, setKey] = useState('');
   const [content, setContent] = useState('');
+  const [busy, setBusy] = useState('');
   const [preview, setPreview] = useState<{ key: string; content: string } | null>(null);
 
   const load = useCallback(() => {
@@ -1958,7 +2149,7 @@ function BucketObjects({ instance, item, notify }: DetailProps) {
     )
       .then((data) => setObjects(data.result.objects))
       .catch((err) => setError(err instanceof Error ? err.message : 'failed to list objects'));
-  }, [instance, item.id]);
+  }, [instance, item.id, region]);
 
   useEffect(() => {
     load();
@@ -1979,8 +2170,82 @@ function BucketObjects({ instance, item, notify }: DetailProps) {
       .catch((err) => setError(err instanceof Error ? err.message : 'upload failed'));
   };
 
+  const uploadFile = (file: File) => {
+    if (file.size > 25 * 1024 * 1024) {
+      setError('file larger than 25 MiB — use the AWS CLI for big uploads');
+      return;
+    }
+    setBusy(file.name);
+    setError('');
+    const reader = new FileReader();
+    reader.onerror = () => {
+      setBusy('');
+      setError('could not read the selected file');
+    };
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const base64 = result.slice(result.indexOf(',') + 1);
+      actOnResource(instance, 's3', region, item.id, 'putObject', {
+        key: file.name,
+        contentBase64: base64,
+        contentType: file.type || 'application/octet-stream',
+      })
+        .then(() => {
+          notify(`file ${file.name} uploaded`);
+          load();
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : 'upload failed'))
+        .finally(() => setBusy(''));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const download = (objectKey: string) => {
+    setBusy(objectKey);
+    setError('');
+    actOnResource<{ key: string; contentBase64: string; contentType: string }>(
+      instance,
+      's3', region,
+      item.id,
+      'downloadObject',
+      { key: objectKey },
+    )
+      .then((data) => {
+        const bytes = Uint8Array.from(atob(data.result.contentBase64), (c) => c.charCodeAt(0));
+        const blob = new Blob([bytes], { type: data.result.contentType });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = objectKey.split('/').pop() ?? objectKey;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'download failed'))
+      .finally(() => setBusy(''));
+  };
+
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) {
+              uploadFile(file);
+            }
+            event.target.value = '';
+          }}
+        />
+        <GhostButton onClick={() => fileRef.current?.click()} disabled={busy !== ''}>
+          <Upload className="h-3.5 w-3.5" /> {busy ? `Uploading ${busy}…` : 'Upload file'}
+        </GhostButton>
+        <span className="text-[10px] text-stone-500">up to 25 MiB, key = file name</span>
+      </div>
       <form onSubmit={upload} className="flex flex-wrap gap-2">
         <input
           value={key}
@@ -1995,7 +2260,7 @@ function BucketObjects({ instance, item, notify }: DetailProps) {
           className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
         />
         <GhostButton type="submit">
-          <Upload className="h-3.5 w-3.5" /> Put object
+          <Upload className="h-3.5 w-3.5" /> Put text
         </GhostButton>
       </form>
       <ActionError message={error} />
@@ -2010,7 +2275,23 @@ function BucketObjects({ instance, item, notify }: DetailProps) {
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">
                 {object.key}
               </span>
-              <span className="text-[10px] text-stone-500">{object.size ?? 0} B</span>
+              {object.lastModified ? (
+                <span className="hidden text-[10px] text-stone-600 sm:inline">
+                  {new Date(object.lastModified).toLocaleString()}
+                </span>
+              ) : null}
+              <span className="text-[10px] text-stone-500">
+                {formatMemory(object.size ?? 0)}
+              </span>
+              <button
+                type="button"
+                onClick={() => object.key && download(object.key)}
+                disabled={busy !== ''}
+                className="rounded p-1 text-stone-500 transition hover:bg-white/10 hover:text-stone-100 disabled:opacity-40"
+                aria-label="Download object"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={() => {
