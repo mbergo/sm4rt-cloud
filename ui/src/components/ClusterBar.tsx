@@ -18,9 +18,7 @@ function UsageBar({ used, total }: { used: number | null; total: number }) {
           className={`h-full rounded-full ${pct > 85 ? 'bg-rose-400' : pct > 65 ? 'bg-amber-400' : 'bg-emerald-400'}`}
           style={{ width: `${pct}%` }}
         />
-      ) : (
-        <div className="h-full w-1/12 bg-white/5" />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -108,10 +106,12 @@ export default function ClusterBar({ cluster }: { cluster: ClusterInfo | null })
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 gap-2.5 overflow-x-auto pb-1 lg:justify-end">
-          {cluster.nodes.map((node) => (
-            <NodeChip key={node.id} node={node} />
-          ))}
+        <div className="flex min-w-0 flex-1 overflow-x-auto pb-1">
+          <div className="ml-auto flex gap-2.5">
+            {cluster.nodes.map((node) => (
+              <NodeChip key={node.id} node={node} />
+            ))}
+          </div>
         </div>
       </div>
     </section>
