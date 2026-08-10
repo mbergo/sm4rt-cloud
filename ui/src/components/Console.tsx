@@ -124,6 +124,7 @@ import {
 } from './Compute';
 import { computeSummary } from '../lib/compute';
 import ClusterBar from './ClusterBar';
+import DomainsPage from './Domains';
 
 type SectionId =
   | 'overview'
@@ -134,6 +135,7 @@ type SectionId =
   | 'logs-instance'
   | 'explorer'
   | 'cdn'
+  | 'domains'
   | 'observability'
   | 'devops';
 
@@ -161,6 +163,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'apigw', label: 'API Gateway', icon: Webhook, group: 'Web & edge' },
   { id: 'route53', label: 'DNS zone', icon: Globe2, group: 'Web & edge' },
   { id: 'cdn', label: 'CDN', icon: HardDrive, group: 'Web & edge' },
+  { id: 'domains', label: 'Custom domains', icon: Globe, group: 'Web & edge' },
   { id: 'devops', label: 'Sm4rt DevOps', icon: GitBranch, group: 'Platform' },
   { id: 'observability', label: 'Observability', icon: Activity, group: 'Platform' },
   { id: 'iam', label: 'IAM', icon: ShieldCheck, group: 'Security & identity' },
@@ -426,6 +429,8 @@ export default function Console({
           <GatewaysPage instance={name} notify={notify} />
         ) : section === 'cdn' ? (
           <CdnPage instance={name} notify={notify} />
+        ) : section === 'domains' ? (
+          <DomainsPage instance={name} notify={notify} />
         ) : section === 'observability' ? (
           <ObservabilityPage instance={name} notify={notify} />
         ) : section === 'devops' ? (

@@ -148,8 +148,8 @@ function useComputeData<T>(load: () => Promise<T>, pollMs = 10000) {
 function SwarmOnlyNote() {
   return (
     <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4 text-sm text-amber-200">
-      Real compute requires the Swarm driver. This workspace runs on a driver without compute
-      support — recreate it on a Swarm-backed region to use this service.
+      This service is not available in this workspace&apos;s region. Recreate the workspace on a
+      compute-enabled region to use it.
     </div>
   );
 }

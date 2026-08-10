@@ -64,7 +64,6 @@ export class DevopsManager {
   private docker: Docker;
   private compute: ComputeManager;
   private tls: boolean;
-  private domain: string;
   private syncTimer: NodeJS.Timeout | null = null;
   private syncing = false;
   private appState = new Map<string, { lastError: string | null; lastSyncAt: string | null }>();
@@ -73,7 +72,6 @@ export class DevopsManager {
     this.compute = compute;
     this.docker = compute.dockerClient;
     this.tls = compute.options.tls;
-    this.domain = compute.options.instanceDomain;
   }
 
   private scheme(): string {
@@ -95,10 +93,10 @@ export class DevopsManager {
     return `sm4rt-gitops-${ws}`;
   }
   private gitHost(ws: string) {
-    return `git.${ws}.${this.domain}`;
+    return this.compute.hostFor(ws, 'git');
   }
   private ciHost(ws: string) {
-    return `ci.${ws}.${this.domain}`;
+    return this.compute.hostFor(ws, 'ci');
   }
 
   // — docker config as tiny KV store (config not attached to services can be rotated) —

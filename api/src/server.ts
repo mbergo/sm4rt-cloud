@@ -15,6 +15,8 @@ import { emit, subscribe } from './events.ts';
 import { ComputeManager } from './compute.ts';
 import { DevopsManager } from './devops.ts';
 import { registerComputeRoutes } from './compute-routes.ts';
+import { Store } from './db.ts';
+import { registerDomainRoutes } from './domains.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -63,9 +65,19 @@ async function createDriver(): Promise<CloudDriver> {
 const provisioner = await createDriver();
 app.log.info({ driver: provisioner.kind }, 'cloud driver initialized');
 
+// Persistence (users, custom domains, workspace settings) — Postgres via
+// DATABASE_URL when set, otherwise a local JSON file.
+const store = new Store({ databaseUrl: process.env.DATABASE_URL });
+await store.init();
+app.log.info({ backend: store.backend }, 'store initialized');
+
 // Sm4rt compute (real VMs/tasks/DBs/caches/CDN/DNS/obs/devops) — swarm only.
 const computeEnabled = provisioner.kind === 'swarm';
-const compute = new ComputeManager({ instanceDomain: INSTANCE_DOMAIN, tls: INSTANCE_TLS });
+const compute = new ComputeManager({
+  instanceDomain: INSTANCE_DOMAIN,
+  tls: INSTANCE_TLS,
+  domainFor: (ws) => store.getDefaultDomain(ws),
+});
 const devops = new DevopsManager(compute);
 if (computeEnabled) {
   devops.startReconciler(async () => (await provisioner.list()).map((i) => i.name));
@@ -117,7 +129,16 @@ app.addHook('onRequest', async (request, reply) => {
   }
   if (CLERK_SECRET_KEY && bearer) {
     try {
-      await verifyToken(bearer, { secretKey: CLERK_SECRET_KEY });
+      const payload = await verifyToken(bearer, { secretKey: CLERK_SECRET_KEY });
+      if (payload.sub) {
+        const email =
+          typeof (payload as Record<string, unknown>).email === 'string'
+            ? ((payload as Record<string, unknown>).email as string)
+            : null;
+        store.upsertUser(payload.sub, email).catch((err) => {
+          request.log.debug({ err }, 'user upsert failed');
+        });
+      }
       return;
     } catch (err) {
       request.log.debug({ err }, 'clerk token verification failed');
@@ -182,8 +203,8 @@ app.get('/cli/raw/install-cli.sh', async (_request, reply) => {
   return reply.type('text/x-shellscript').send(script);
 });
 
-// Caddy on-demand TLS "ask" — only issue certificates for the console host
-// or subdomains of instances that actually exist.
+// Caddy on-demand TLS "ask" — issue certificates for the console host,
+// subdomains of instances that actually exist, and verified custom domains.
 app.get('/api/public/tls-ask', async (request, reply) => {
   const { domain } = request.query as { domain?: string };
   if (!domain) {
@@ -198,6 +219,11 @@ app.get('/api/public/tls-ask', async (request, reply) => {
     if (instance) {
       return { allowed: true };
     }
+  }
+  // Verified tenant domain → allow when its workspace still exists.
+  const row = store.domainForHost(domain);
+  if (row && (await provisioner.get(row.workspace))) {
+    return { allowed: true };
   }
   return reply.code(404).send({ error: `no instance for ${domain}` });
 });
@@ -424,6 +450,16 @@ registerComputeRoutes(app, {
   devops,
   requireInstance: requireRunningInstance,
   enabled: computeEnabled,
+});
+
+// Custom tenant domains (register → verify via public DNS → set as default).
+const EDGE_IP = process.env.EDGE_IP ?? '';
+const EDGE_CNAME = process.env.EDGE_CNAME ?? CONSOLE_HOST;
+registerDomainRoutes(app, {
+  store,
+  compute,
+  edge: EDGE_IP ? { ip: EDGE_IP } : { cname: EDGE_CNAME },
+  hasWorkspace: async (ws) => (await requireRunningInstance(ws)) != null,
 });
 
 const VALID_REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
