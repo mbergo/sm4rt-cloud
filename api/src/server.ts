@@ -66,6 +66,15 @@ async function createDriver(): Promise<CloudDriver> {
 const provisioner = await createDriver();
 app.log.info({ driver: provisioner.kind }, 'cloud driver initialized');
 
+// Multi-node swarms need a per-node exec relay; create/refresh it in the
+// background so boot never blocks on it.
+if (provisioner.kind === 'swarm' && 'ensureExecAgent' in provisioner) {
+  (provisioner as { ensureExecAgent: () => Promise<void> })
+    .ensureExecAgent()
+    .then(() => app.log.info('exec agent ensured'))
+    .catch((err) => app.log.warn({ err }, 'exec agent setup failed'));
+}
+
 // Persistence (users, custom domains, workspace settings) — Postgres via
 // DATABASE_URL when set, otherwise a local JSON file.
 const store = new Store({ databaseUrl: process.env.DATABASE_URL });
