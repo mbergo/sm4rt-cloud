@@ -342,3 +342,31 @@ export const removeGitopsApp = (ws: string, app: string) =>
 // — Workspace summary —
 
 export const computeSummary = (ws: string) => request<Record<string, number>>(`${base(ws)}/summary`);
+
+// — Container Registry (registry:2, docker push real) —
+
+export interface RegistryStatus {
+  enabled: boolean;
+  state: string;
+  host: string | null;
+  url: string | null;
+  user: string | null;
+  password: string | null;
+}
+
+export interface RegistryRepo {
+  name: string;
+  tags: string[];
+}
+
+export const getRegistry = (ws: string) => request<RegistryStatus>(`${base(ws)}/registry`);
+export const enableRegistry = (ws: string) =>
+  request<RegistryStatus>(`${base(ws)}/registry`, { method: 'POST', body: '{}' });
+export const disableRegistry = (ws: string) =>
+  request<void>(`${base(ws)}/registry`, { method: 'DELETE' });
+export const listRegistryRepos = (ws: string) =>
+  request<{ repos: RegistryRepo[] }>(`${base(ws)}/registry/repos`);
+export const deleteRegistryTag = (ws: string, repo: string, tag: string) =>
+  request<void>(`${base(ws)}/registry/repos/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tag)}`, {
+    method: 'DELETE',
+  });
