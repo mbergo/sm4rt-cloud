@@ -178,6 +178,9 @@ export const REAL_SERVICES = [
   'iceberg',
   'trino',
   'airflow',
+  'spark',
+  'atlas',
+  'polaris',
   'lgtm',
 ] as const;
 export type RealServiceId = (typeof REAL_SERVICES)[number];

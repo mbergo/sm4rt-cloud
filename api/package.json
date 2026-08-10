@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch src/server.ts",
     "start": "node src/server.ts",
-    "test": "node --test tests/names.test.ts tests/resources.test.ts tests/compute.test.ts tests/json-body.test.ts tests/domains.test.ts",
+    "test": "node --test tests/names.test.ts tests/services.test.ts tests/resources.test.ts tests/compute.test.ts tests/json-body.test.ts tests/domains.test.ts",
     "test:e2e": "RUN_KIND=1 node --test --test-concurrency 1 tests/e2e-kind.test.ts"
   },
   "dependencies": {

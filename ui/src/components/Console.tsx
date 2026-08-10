@@ -6,11 +6,13 @@ import {
   ArrowLeft,
   AudioWaveform,
   Bell,
+  BookOpen,
   Bot,
   Boxes,
   CalendarClock,
   Cat,
   CheckCircle2,
+  Compass,
   Container,
   Cylinder,
   Database,
@@ -18,8 +20,10 @@ import {
   Droplets,
   Eye,
   ExternalLink,
+  Feather,
   FileSearch,
   FileText,
+  Flame,
   FlaskConical,
   GitBranch,
   GitPullRequest,
@@ -28,6 +32,7 @@ import {
   Globe2,
   HardDrive,
   KeyRound,
+  Landmark,
   LayoutDashboard,
   Layers,
   ListTree,
@@ -130,6 +135,7 @@ type SectionId =
   | 'overview'
   | ServiceId
   | 'services'
+  | 'data-eng'
   | 'agents'
   | 'monitoring'
   | 'logs-instance'
@@ -142,6 +148,7 @@ type SectionId =
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'services', label: 'Service catalog', icon: Boxes },
+  { id: 'data-eng', label: 'Data Engineering', icon: Landmark },
   { id: 's3', label: 'Buckets', icon: Archive, group: 'Storage & data' },
   { id: 'dynamodb', label: 'Tables', icon: Database, group: 'Storage & data' },
   { id: 'rds', label: 'Databases (RDS)', icon: Cylinder, group: 'Storage & data' },
@@ -234,6 +241,9 @@ const SERVICE_ICON: Record<RealServiceId, typeof Archive> = {
   iceberg: Snowflake,
   trino: Database,
   airflow: Wind,
+  spark: Flame,
+  atlas: BookOpen,
+  polaris: Compass,
   lgtm: Gauge,
 };
 
@@ -409,6 +419,8 @@ export default function Console({
           <LogsView name={name} />
         ) : section === 'services' ? (
           <ServicesCatalog instance={name} notify={notify} />
+        ) : section === 'data-eng' ? (
+          <DataEngineeringPage instance={name} notify={notify} />
         ) : section === 'agents' ? (
           <OtelAgentView instance={name} notify={notify} />
         ) : section === 'monitoring' ? (
@@ -1477,6 +1489,394 @@ function ServicesCatalog({
           </section>
         );
       })}
+    </div>
+  );
+}
+
+type DataEngItem = {
+  id: RealServiceId | 'griffin';
+  name: string;
+  poweredBy: string;
+  role: string;
+  essential: boolean;
+  deployable: boolean;
+};
+
+type DataEngStage = {
+  id: string;
+  step: string;
+  title: string;
+  blurb: string;
+  items: DataEngItem[];
+};
+
+const DATA_ENGINEERING: DataEngStage[] = [
+  {
+    id: 'ingest',
+    step: '01',
+    title: 'Ingest & stream',
+    blurb: 'Move data in — event streams, flow-based routing, and stream processing at the edge of the lake.',
+    items: [
+      {
+        id: 'kafka',
+        name: 'Kafka',
+        poweredBy: 'Apache Kafka',
+        role: 'Durable event backbone for producers and consumers.',
+        essential: true,
+        deployable: true,
+      },
+      {
+        id: 'nifi',
+        name: 'Iris',
+        poweredBy: 'Apache NiFi',
+        role: 'Visual dataflow — route, transform and deliver between systems.',
+        essential: false,
+        deployable: true,
+      },
+      {
+        id: 'flink',
+        name: 'Zephyros',
+        poweredBy: 'Apache Flink',
+        role: 'Stateful stream processing with exactly-once guarantees.',
+        essential: false,
+        deployable: true,
+      },
+    ],
+  },
+  {
+    id: 'store',
+    step: '02',
+    title: 'Store',
+    blurb: 'Land it durably — S3-compatible object storage and open table format on top.',
+    items: [
+      {
+        id: 'ozone',
+        name: 'Ozone',
+        poweredBy: 'Apache Ozone',
+        role: 'S3-compatible object store for the lake itself.',
+        essential: true,
+        deployable: true,
+      },
+      {
+        id: 'iceberg',
+        name: 'Iceberg',
+        poweredBy: 'Apache Iceberg',
+        role: 'Open table format — ACID, schema evolution, time travel.',
+        essential: true,
+        deployable: true,
+      },
+    ],
+  },
+  {
+    id: 'catalog',
+    step: '03',
+    title: 'Catalog & governance',
+    blurb: 'Know what you have — REST catalogs, metadata, lineage and data quality.',
+    items: [
+      {
+        id: 'polaris',
+        name: 'Ariadne',
+        poweredBy: 'Apache Polaris',
+        role: 'Iceberg REST catalog — the thread that guides engines to tables.',
+        essential: false,
+        deployable: true,
+      },
+      {
+        id: 'atlas',
+        name: 'Atlas',
+        poweredBy: 'Apache Atlas',
+        role: 'Metadata, classification and lineage across the platform.',
+        essential: false,
+        deployable: true,
+      },
+      {
+        id: 'griffin',
+        name: 'Griffin',
+        poweredBy: 'Apache Griffin',
+        role: 'Data quality measurement — accuracy, completeness, timeliness.',
+        essential: false,
+        deployable: false,
+      },
+    ],
+  },
+  {
+    id: 'process',
+    step: '04',
+    title: 'Process',
+    blurb: 'Transform at scale — batch and micro-batch compute over the lake.',
+    items: [
+      {
+        id: 'spark',
+        name: 'Spark',
+        poweredBy: 'Apache Spark',
+        role: 'Distributed compute engine for ETL, ML and SQL workloads.',
+        essential: true,
+        deployable: true,
+      },
+    ],
+  },
+  {
+    id: 'orchestrate',
+    step: '05',
+    title: 'Orchestrate',
+    blurb: 'Schedule and connect every step into reliable, observable pipelines.',
+    items: [
+      {
+        id: 'airflow',
+        name: 'Airflow',
+        poweredBy: 'Apache Airflow',
+        role: 'DAG scheduling and monitoring for the whole pipeline.',
+        essential: true,
+        deployable: true,
+      },
+    ],
+  },
+  {
+    id: 'query',
+    step: '06',
+    title: 'Query',
+    blurb: 'Serve answers — federated interactive SQL directly over lake tables.',
+    items: [
+      {
+        id: 'trino',
+        name: 'Trino',
+        poweredBy: 'Trino',
+        role: 'Interactive SQL over Iceberg, Kafka and more.',
+        essential: true,
+        deployable: true,
+      },
+    ],
+  },
+];
+
+const DATA_ENG_ICON: Record<string, typeof Archive> = {
+  griffin: Feather,
+};
+
+function DataEngineeringPage({
+  instance,
+  notify,
+}: {
+  instance: string;
+  notify: (message: string, tone?: 'ok' | 'err') => void;
+}) {
+  const [services, setServices] = useState<RealServiceInfo[] | null>(null);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState<RealServiceId | null>(null);
+  const [busyId, setBusyId] = useState<RealServiceId | null>(null);
+
+  const refresh = useCallback(() => {
+    listServices(instance)
+      .then((data) => {
+        setServices(data.services);
+        setError('');
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'failed to load services');
+      });
+  }, [instance]);
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const quickAct = async (service: RealServiceInfo, action: 'start' | 'stop') => {
+    setBusyId(service.id);
+    try {
+      const next =
+        action === 'start'
+          ? await startService(instance, service.id)
+          : await stopService(instance, service.id);
+      setServices((prev) =>
+        prev ? prev.map((entry) => (entry.id === next.id ? next : entry)) : prev,
+      );
+      notify(action === 'start' ? `${next.label} starting` : `${next.label} stopped`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : `failed to ${action} ${service.label}`, 'err');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (selected) {
+    return (
+      <RealServiceView
+        instance={instance}
+        service={selected}
+        notify={notify}
+        onBack={() => setSelected(null)}
+      />
+    );
+  }
+
+  const byId = new Map((services ?? []).map((entry) => [entry.id, entry]));
+  const allItems = DATA_ENGINEERING.flatMap((stage) => stage.items);
+  const runningCount = allItems.filter(
+    (item) => item.deployable && byId.get(item.id as RealServiceId)?.status === 'running',
+  ).length;
+  const deployableCount = allItems.filter((item) => item.deployable).length;
+
+  return (
+    <div className="space-y-8">
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-amber-500/[0.07] via-white/[0.03] to-transparent p-6">
+        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-amber-500/10 blur-3xl" />
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-xl">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400/90">
+              Data lake &amp; ETL
+            </p>
+            <h2 className="mt-1 font-display text-xl font-bold tracking-tight text-stone-100">
+              Data Engineering
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-stone-400">
+              A complete lakehouse, assembled from the Apache data stack. Every stage below is a
+              real service you can start in this workspace — ingest events, land them in object
+              storage, catalog them, transform, orchestrate, then query with SQL.
+            </p>
+          </div>
+          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-stone-400">
+            {runningCount} running · {deployableCount} available
+          </span>
+        </div>
+        <div className="mt-5 flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-stone-400">
+          {DATA_ENGINEERING.map((stage, index) => (
+            <span key={stage.id} className="flex items-center gap-1.5">
+              <a
+                href={`#de-${stage.id}`}
+                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 transition hover:border-amber-500/30 hover:text-amber-200"
+              >
+                <span className="mr-1 font-mono text-[9px] text-amber-500/80">{stage.step}</span>
+                {stage.title}
+              </a>
+              {index < DATA_ENGINEERING.length - 1 ? (
+                <span className="text-stone-600">→</span>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-rose-500/20 bg-rose-500/[0.06] px-3 py-2 font-mono text-xs text-rose-200">
+          {error}
+        </p>
+      ) : null}
+
+      {DATA_ENGINEERING.map((stage) => (
+        <section key={stage.id} id={`de-${stage.id}`}>
+          <div className="flex items-baseline gap-2.5">
+            <span className="font-mono text-xs font-semibold text-amber-500/80">{stage.step}</span>
+            <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+              {stage.title}
+            </h3>
+          </div>
+          <p className="mt-1 pl-7 text-xs text-stone-500">{stage.blurb}</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {stage.items.map((item) => {
+              const live = item.deployable ? byId.get(item.id as RealServiceId) : undefined;
+              const Icon = item.deployable
+                ? SERVICE_ICON[item.id as RealServiceId]
+                : (DATA_ENG_ICON[item.id] ?? Archive);
+              const canStart = live ? live.status === 'stopped' || live.status === 'error' : false;
+              const busy = live ? busyId === live.id : false;
+              if (!item.deployable) {
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-dashed border-white/10 bg-white/[0.015] p-4 text-left opacity-80"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-500">
+                          <Icon className="h-4.5 w-4.5" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-stone-300">{item.name}</p>
+                          <p className="font-mono text-[10px] text-stone-500">
+                            powered by {item.poweredBy}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-stone-500">
+                        Roadmap
+                      </span>
+                    </div>
+                    <p className="mt-2.5 text-xs leading-relaxed text-stone-500">{item.role}</p>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={item.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelected(item.id as RealServiceId)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelected(item.id as RealServiceId);
+                    }
+                  }}
+                  className="group cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-amber-500/30 hover:bg-white/[0.05]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-300 transition group-hover:border-amber-500/30 group-hover:text-amber-200">
+                        <Icon className="h-4.5 w-4.5" />
+                      </span>
+                      <div>
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-stone-100">
+                          {item.name}
+                          {item.essential ? (
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-300">
+                              Core
+                            </span>
+                          ) : null}
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${SERVICE_STATUS_DOT[live?.status ?? 'stopped']}`}
+                          />
+                        </p>
+                        <p className="font-mono text-[10px] text-stone-500">
+                          powered by {item.poweredBy}
+                        </p>
+                      </div>
+                    </div>
+                    {live ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void quickAct(live, canStart ? 'start' : 'stop');
+                        }}
+                        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
+                          canStart
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                            : 'border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
+                        }`}
+                        aria-label={canStart ? `Start ${item.name}` : `Stop ${item.name}`}
+                      >
+                        {busy ? (
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        ) : canStart ? (
+                          <Play className="h-3.5 w-3.5" />
+                        ) : (
+                          <Square className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">
+                    {item.role}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
