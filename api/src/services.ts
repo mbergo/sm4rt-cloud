@@ -17,6 +17,9 @@ export const REAL_SERVICES = [
   'iceberg',
   'trino',
   'airflow',
+  'spark',
+  'atlas',
+  'polaris',
   'lgtm',
 ] as const;
 export type RealServiceId = (typeof REAL_SERVICES)[number];
@@ -633,6 +636,109 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       { label: 'Airflow UI (in-cluster)', value: `http://${serviceHost}:8080` },
       ...(externalUrl ? [{ label: 'Airflow UI (public)', value: externalUrl }] : []),
       { label: 'Login', value: 'not required (dev mode, all admins)' },
+    ],
+  },
+  spark: {
+    id: 'spark',
+    label: 'Spark',
+    description: 'Apache Spark 4.0 standalone cluster (master + worker) for large-scale data processing.',
+    image: 'apache/spark:4.0.4',
+    category: 'analytics',
+    command: ['/opt/spark/bin/spark-class', 'org.apache.spark.deploy.master.Master'],
+    ports: [
+      { name: 'ui', port: 8080 },
+      { name: 'rpc', port: 7077 },
+    ],
+    probePort: 8080,
+    startupSeconds: 150,
+    // SPARK_MASTER_HOST=localhost: swarm rewrites localhost -> service alias so
+    // the master advertises the address workers dial; in k8s the worker sidecar
+    // shares the pod, so localhost already matches (same pattern as flink's
+    // jobmanager.rpc.address).
+    env: () => [
+      { name: 'SPARK_MASTER_HOST', value: 'localhost' },
+      { name: 'SPARK_DAEMON_MEMORY', value: '512m' },
+    ],
+    resources: {
+      requests: { cpu: '250m', memory: '768Mi' },
+      limits: { cpu: '1', memory: '1536Mi' },
+    },
+    sidecars: [
+      {
+        name: 'worker',
+        command: ['/bin/sh', '-c', 'exec /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker "$SPARK_MASTER_URL"'],
+        env: [
+          { name: 'SPARK_MASTER_URL', value: 'spark://localhost:7077' },
+          { name: 'SPARK_WORKER_CORES', value: '1' },
+          { name: 'SPARK_WORKER_MEMORY', value: '1g' },
+          { name: 'SPARK_WORKER_WEBUI_PORT', value: '8081' },
+          { name: 'SPARK_DAEMON_MEMORY', value: '512m' },
+        ],
+        resources: {
+          requests: { cpu: '250m', memory: '1Gi' },
+          limits: { cpu: '1', memory: '2Gi' },
+        },
+      },
+    ],
+    httpIngressPort: 8080,
+    endpoints: ({ serviceHost, externalUrl }) => [
+      { label: 'Master UI (in-cluster)', value: `http://${serviceHost}:8080` },
+      ...(externalUrl ? [{ label: 'Master UI (public)', value: externalUrl }] : []),
+      { label: 'Master URL', value: `spark://${serviceHost}:7077` },
+      { label: 'spark-submit', value: `spark-submit --master spark://${serviceHost}:7077 app.py` },
+    ],
+  },
+  atlas: {
+    id: 'atlas',
+    label: 'Atlas',
+    description:
+      'Apache Atlas 2.3 metadata catalog & governance (lineage, classification). Embedded HBase + Solr — first start takes 5-8 min.',
+    image: 'sburn/apache-atlas:2.3.0',
+    category: 'pipelines',
+    ports: [{ name: 'http', port: 21000 }],
+    probePort: 21000,
+    startupSeconds: 600,
+    env: () => [],
+    resources: {
+      requests: { cpu: '500m', memory: '2Gi' },
+      limits: { cpu: '1500m', memory: '3Gi' },
+    },
+    volumes: [{ name: 'data', mountPath: '/apache-atlas/data' }],
+    httpIngressPort: 21000,
+    endpoints: ({ serviceHost, externalUrl }) => [
+      { label: 'Atlas UI (in-cluster)', value: `http://${serviceHost}:21000` },
+      ...(externalUrl ? [{ label: 'Atlas UI (public)', value: externalUrl }] : []),
+      { label: 'REST API', value: `http://${serviceHost}:21000/api/atlas/v2` },
+      { label: 'Login', value: 'admin / admin' },
+    ],
+  },
+  polaris: {
+    id: 'polaris',
+    label: 'Ariadne (Polaris)',
+    description:
+      'Ariadne — Apache Polaris 1.7 REST catalog for Iceberg tables (multi-catalog, credential vending).',
+    image: 'apache/polaris:1.7.0',
+    category: 'pipelines',
+    ports: [
+      { name: 'api', port: 8181 },
+      { name: 'mgmt', port: 8182 },
+    ],
+    probePort: 8181,
+    startupSeconds: 90,
+    env: () => [
+      { name: 'POLARIS_BOOTSTRAP_CREDENTIALS', value: 'POLARIS,root,secret' },
+      { name: 'POLARIS_REALM_CONTEXT_REALMS', value: 'POLARIS' },
+    ],
+    resources: {
+      requests: { cpu: '100m', memory: '512Mi' },
+      limits: { cpu: '1', memory: '1Gi' },
+    },
+    httpIngressPort: 8181,
+    endpoints: ({ serviceHost, externalUrl }) => [
+      { label: 'Catalog API (in-cluster)', value: `http://${serviceHost}:8181/api/catalog` },
+      ...(externalUrl ? [{ label: 'Catalog API (public)', value: `${externalUrl}/api/catalog` }] : []),
+      { label: 'Management API', value: `http://${serviceHost}:8181/api/management/v1` },
+      { label: 'OAuth token', value: `POST http://${serviceHost}:8181/api/catalog/v1/oauth/tokens (client root/secret, realm POLARIS)` },
     ],
   },
   lgtm: {
