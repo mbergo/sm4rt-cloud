@@ -261,11 +261,20 @@ export class SwarmDriver implements CloudDriver {
     });
   }
 
-  private async newestTask(serviceName: string): Promise<TaskSummary | null> {
-    const tasks = await this.docker.listTasks({
-      filters: JSON.stringify({ service: [serviceName] }),
-    });
-    const sorted = (tasks as Array<Record<string, any>>).sort((a, b) =>
+  private async newestTask(
+    serviceName: string,
+    opts?: { runningOnly?: boolean },
+  ): Promise<TaskSummary | null> {
+    const filters: Record<string, string[]> = { service: [serviceName] };
+    if (opts?.runningOnly) {
+      filters['desired-state'] = ['running'];
+    }
+    const tasks = await this.docker.listTasks({ filters: JSON.stringify(filters) });
+    let candidates = tasks as Array<Record<string, any>>;
+    if (opts?.runningOnly) {
+      candidates = candidates.filter((t) => String(t.Status?.State ?? '') === 'running');
+    }
+    const sorted = candidates.sort((a, b) =>
       String(b.CreatedAt ?? '').localeCompare(String(a.CreatedAt ?? '')),
     );
     const task = sorted[0];
@@ -867,7 +876,7 @@ export class SwarmDriver implements CloudDriver {
     timeoutMs = 30_000,
   ): Promise<{ output: string; exitCode: number | null; timedOut: boolean }> {
     const { specName } = await this.resolveOwnedService(name, target);
-    const task = await this.newestTask(specName);
+    const task = await this.newestTask(specName, { runningOnly: true });
     if (!task?.containerId) {
       const err = new Error(`no running container for "${target}"`) as Error & {
         statusCode: number;
