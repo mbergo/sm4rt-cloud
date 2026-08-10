@@ -12,6 +12,8 @@ import {
   CalendarClock,
   Cat,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Container,
   Cylinder,
@@ -42,6 +44,7 @@ import {
   MessagesSquare,
   Network,
   NotebookPen,
+  Pause,
   Play,
   Plus,
   Radio,
@@ -75,6 +78,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -85,17 +89,20 @@ import {
   createResource,
   deleteInstance,
   deleteResource,
+  execCommand,
   exploreCall,
   getInstance,
   getInstanceMetrics,
   getLogs,
+  getServiceConfig,
   isRealServiceId,
   getOtelAgentLogs,
-  getServiceLogs,
   listOtelAgentRuns,
   listExplorerServices,
   listResources,
   listServices,
+  openLogStream,
+  putServiceEnv,
   startOtelAgent,
   startService,
   stopService,
@@ -107,6 +114,8 @@ import {
   type RealServiceInfo,
   type RealServiceStatus,
   type ServiceCategory,
+  type ServiceConfigInfo,
+  type ServiceInstanceRef,
   type ExplorerService,
   SERVICE_CATEGORIES,
   REGIONS,
@@ -282,6 +291,165 @@ function useRegion(): Region {
   return useContext(RegionContext);
 }
 
+// — shared log console (single dock at the bottom, one stream at a time) —
+
+interface LogTarget {
+  instance: string;
+  service: string;
+  label: string;
+}
+
+interface LogConsoleApi {
+  open: (target: LogTarget) => void;
+  close: () => void;
+  target: LogTarget | null;
+}
+
+const LogConsoleContext = createContext<LogConsoleApi>({
+  open: () => {},
+  close: () => {},
+  target: null,
+});
+
+function useLogConsole(): LogConsoleApi {
+  return useContext(LogConsoleContext);
+}
+
+const LOG_BUFFER_MAX = 2000;
+
+function LogDock({ target, onClose }: { target: LogTarget; onClose: () => void }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [paused, setPaused] = useState(false);
+  const [large, setLarge] = useState(false);
+  const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting');
+  const preRef = useRef<HTMLPreElement>(null);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
+  useEffect(() => {
+    setLines([]);
+    setStatus('connecting');
+    let source: EventSource | null = null;
+    let cancelled = false;
+    openLogStream(target.instance, target.service, 200)
+      .then((es) => {
+        if (cancelled) {
+          es.close();
+          return;
+        }
+        source = es;
+        es.onopen = () => setStatus('live');
+        es.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data) as { chunk?: string; done?: boolean };
+            if (payload.done) {
+              setStatus('ended');
+              es.close();
+              return;
+            }
+            if (payload.chunk) {
+              const next = payload.chunk.split('\n').filter((l) => l.length > 0);
+              if (next.length > 0) {
+                setLines((prev) => {
+                  const merged = [...prev, ...next];
+                  return merged.length > LOG_BUFFER_MAX
+                    ? merged.slice(merged.length - LOG_BUFFER_MAX)
+                    : merged;
+                });
+              }
+            }
+          } catch {
+            // ignore malformed frames
+          }
+        };
+        es.onerror = () => setStatus('error');
+      })
+      .catch(() => setStatus('error'));
+    return () => {
+      cancelled = true;
+      source?.close();
+    };
+  }, [target.instance, target.service]);
+
+  useEffect(() => {
+    if (!pausedRef.current) {
+      requestAnimationFrame(() => {
+        preRef.current?.scrollTo({ top: preRef.current.scrollHeight });
+      });
+    }
+  }, [lines]);
+
+  const statusStyle =
+    status === 'live'
+      ? 'bg-emerald-400'
+      : status === 'connecting'
+        ? 'bg-amber-400 animate-pulse'
+        : status === 'ended'
+          ? 'bg-stone-500'
+          : 'bg-rose-400';
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-stone-950/95 shadow-[0_-8px_30px_rgba(0,0,0,0.5)] backdrop-blur">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+          <span className={`h-2 w-2 shrink-0 rounded-full ${statusStyle}`} />
+          <span className="truncate font-mono text-[11px] text-stone-300">{target.label}</span>
+          <span className="hidden shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-stone-500 sm:inline">
+            {status === 'live' ? 'streaming' : status}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPaused((v) => !v)}
+            className={`rounded-md border p-1 transition ${
+              paused
+                ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                : 'border-white/10 bg-white/5 text-stone-400 hover:text-stone-200'
+            }`}
+            aria-label={paused ? 'Resume auto-scroll' : 'Pause auto-scroll'}
+          >
+            {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setLines([])}
+            className="rounded-md border border-white/10 bg-white/5 p-1 text-stone-400 transition hover:text-stone-200"
+            aria-label="Clear logs"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setLarge((v) => !v)}
+            className="rounded-md border border-white/10 bg-white/5 p-1 text-stone-400 transition hover:text-stone-200"
+            aria-label={large ? 'Shrink console' : 'Expand console'}
+          >
+            {large ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-white/10 bg-white/5 p-1 text-stone-400 transition hover:text-rose-300"
+            aria-label="Close console"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+      <pre
+        ref={preRef}
+        className={`mx-auto max-w-7xl overflow-auto px-4 pb-3 font-mono text-[11px] leading-relaxed text-emerald-100/70 ${
+          large ? 'h-[50vh]' : 'h-48'
+        }`}
+      >
+        {lines.length > 0 ? lines.join('\n') : status === 'error' ? 'stream unavailable' : 'waiting for log output…'}
+      </pre>
+    </div>
+  );
+}
+
 export default function Console({
   name,
   cluster,
@@ -297,6 +465,16 @@ export default function Console({
   const [missing, setMissing] = useState(false);
   const [section, setSection] = useState<SectionId>('overview');
   const [region, setRegion] = useState<Region>('us-east-1');
+  const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
+
+  const logApi = useMemo<LogConsoleApi>(
+    () => ({
+      open: setLogTarget,
+      close: () => setLogTarget(null),
+      target: logTarget,
+    }),
+    [logTarget],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -333,7 +511,11 @@ export default function Console({
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-6 py-6">
+    <LogConsoleContext.Provider value={logApi}>
+      <div
+        className="mx-auto w-full max-w-7xl px-6 py-6"
+        style={logTarget ? { paddingBottom: '16rem' } : undefined}
+      >
       {cluster !== undefined ? <ClusterBar cluster={cluster} /> : null}
       <div className="flex w-full gap-6">
       <aside className="w-56 shrink-0">
@@ -454,7 +636,9 @@ export default function Console({
         )}
       </div>
       </div>
-    </div>
+      </div>
+      {logTarget ? <LogDock target={logTarget} onClose={() => setLogTarget(null)} /> : null}
+    </LogConsoleContext.Provider>
   );
 }
 
@@ -807,77 +991,205 @@ function LogsView({ name }: { name: string }) {
   );
 }
 
-function ServiceTerminal({ instance, service }: { instance: string; service: RealServiceId }) {
-  const [logs, setLogs] = useState('');
-  const [follow, setFollow] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const ref = useRef<HTMLPreElement>(null);
-  const followRef = useRef(follow);
-  followRef.current = follow;
-
-  const refresh = useCallback(() => {
-    setBusy(true);
-    getServiceLogs(instance, service, 300)
-      .then((data) => {
-        setLogs(data.logs || 'no log output yet');
-        if (followRef.current) {
-          requestAnimationFrame(() => {
-            ref.current?.scrollTo({ top: ref.current.scrollHeight });
-          });
-        }
-      })
-      .catch(() => setLogs('failed to fetch logs'))
-      .finally(() => setBusy(false));
-  }, [instance, service]);
+function ServicePanel({
+  instance,
+  target,
+  label,
+}: {
+  instance: string;
+  target: string;
+  label: string;
+}) {
+  const [tab, setTab] = useState<'config' | 'exec'>('config');
+  const [config, setConfig] = useState<ServiceConfigInfo | null>(null);
+  const [configErr, setConfigErr] = useState<string | null>(null);
+  const [envText, setEnvText] = useState('');
+  const [savingEnv, setSavingEnv] = useState(false);
+  const [envMsg, setEnvMsg] = useState<string | null>(null);
+  const [cmdText, setCmdText] = useState('');
+  const [execBusy, setExecBusy] = useState(false);
+  const [execOut, setExecOut] = useState<{ output: string; exitCode: number | null; timedOut?: boolean } | null>(null);
+  const logConsole = useLogConsole();
 
   useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 4000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    let cancelled = false;
+    setConfig(null);
+    setConfigErr(null);
+    setEnvMsg(null);
+    setExecOut(null);
+    getServiceConfig(instance, target)
+      .then((data) => {
+        if (!cancelled) {
+          setConfig(data);
+          setEnvText(data.env.join('\n'));
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setConfigErr(err instanceof Error ? err.message : 'failed to load config');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [instance, target]);
+
+  const saveEnv = () => {
+    const env = envText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    setSavingEnv(true);
+    setEnvMsg(null);
+    putServiceEnv(instance, target, env)
+      .then((data) => {
+        setConfig(data);
+        setEnvText(data.env.join('\n'));
+        setEnvMsg('saved — service restarting with new env');
+      })
+      .catch((err: unknown) => {
+        setEnvMsg(err instanceof Error ? err.message : 'failed to save');
+      })
+      .finally(() => setSavingEnv(false));
+  };
+
+  const runCmd = () => {
+    const cmd = cmdText.trim().split(/\s+/).filter(Boolean);
+    if (cmd.length === 0 || execBusy) {
+      return;
+    }
+    setExecBusy(true);
+    setExecOut(null);
+    execCommand(instance, target, cmd)
+      .then(setExecOut)
+      .catch((err: unknown) => {
+        setExecOut({
+          output: err instanceof Error ? err.message : 'exec failed',
+          exitCode: null,
+        });
+      })
+      .finally(() => setExecBusy(false));
+  };
 
   return (
-    <section>
-      <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">Logs</h3>
-      <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/60">
-        <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-3 py-2">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-rose-500/70" />
-            <span className="h-2.5 w-2.5 rounded-full bg-amber-500/70" />
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70" />
-            <span className="ml-2 font-mono text-[11px] text-stone-500">
-              svc-{service} — tail -f
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-3 py-2">
+        <div className="flex items-center gap-1">
+          {(['config', 'exec'] as const).map((id) => (
             <button
+              key={id}
               type="button"
-              onClick={() => setFollow((value) => !value)}
-              className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition ${
-                follow
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                  : 'border-white/10 bg-white/5 text-stone-400 hover:text-stone-200'
+              onClick={() => setTab(id)}
+              className={`rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest transition ${
+                tab === id
+                  ? 'bg-amber-500/15 text-amber-200'
+                  : 'text-stone-500 hover:bg-white/5 hover:text-stone-300'
               }`}
             >
-              Follow
+              {id}
             </button>
-            <button
-              type="button"
-              onClick={refresh}
-              disabled={busy}
-              className="rounded-md border border-white/10 bg-white/5 p-1 text-stone-400 transition hover:text-stone-200 disabled:opacity-50"
-              aria-label="Refresh logs"
-            >
-              <RefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
+          ))}
         </div>
-        <pre
-          ref={ref}
-          className="max-h-80 min-h-40 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-emerald-100/70"
+        <button
+          type="button"
+          onClick={() => logConsole.open({ instance, service: target, label })}
+          className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-stone-300 transition hover:border-amber-400/40 hover:text-amber-200"
         >
-          {logs || 'loading logs…'}
-        </pre>
+          <ScrollText className="h-3 w-3" /> Stream logs
+        </button>
+      </div>
+      <div className="p-3">
+        {tab === 'config' ? (
+          configErr ? (
+            <p className="text-xs text-rose-300">{configErr}</p>
+          ) : !config ? (
+            <div className="h-24 animate-pulse rounded-lg bg-white/[0.03]" />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-400">
+                <span>
+                  image <span className="font-mono text-stone-200">{config.image}</span>
+                </span>
+                {config.ports.length > 0 ? (
+                  <span>
+                    ports{' '}
+                    <span className="font-mono text-stone-200">
+                      {config.ports.map((p) => `${p.published ?? '?'}→${p.target}`).join(', ')}
+                    </span>
+                  </span>
+                ) : null}
+                {config.mounts.length > 0 ? (
+                  <span>
+                    mounts{' '}
+                    <span className="font-mono text-stone-200">
+                      {config.mounts.map((m) => m.target).join(', ')}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-stone-600">
+                  Environment (one KEY=value per line)
+                </span>
+                <textarea
+                  value={envText}
+                  onChange={(event) => setEnvText(event.target.value)}
+                  rows={Math.min(10, Math.max(4, envText.split('\n').length + 1))}
+                  spellCheck={false}
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-stone-950 px-2.5 py-2 font-mono text-[11px] text-stone-200 outline-none transition focus:border-amber-500/50"
+                />
+              </label>
+              <div className="flex items-center gap-3">
+                <PrimaryButton onClick={saveEnv} disabled={savingEnv}>
+                  {savingEnv ? 'Saving…' : 'Save env'}
+                </PrimaryButton>
+                {envMsg ? <span className="text-xs text-stone-400">{envMsg}</span> : null}
+              </div>
+            </div>
+          )
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <input
+                value={cmdText}
+                onChange={(event) => setCmdText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    runCmd();
+                  }
+                }}
+                placeholder="command to run inside the container, e.g. ls -la /data"
+                spellCheck={false}
+                className="w-full rounded-lg border border-white/10 bg-stone-950 px-2.5 py-1.5 font-mono text-[11px] text-stone-200 outline-none transition focus:border-amber-500/50"
+              />
+              <PrimaryButton onClick={runCmd} disabled={execBusy || cmdText.trim().length === 0}>
+                {execBusy ? 'Running…' : 'Run'}
+              </PrimaryButton>
+            </div>
+            {execOut ? (
+              <div>
+                <div className="mb-1 flex items-center gap-2 text-[11px] text-stone-500">
+                  <span>
+                    exit{' '}
+                    <span
+                      className={`font-mono ${execOut.exitCode === 0 ? 'text-emerald-300' : 'text-rose-300'}`}
+                    >
+                      {execOut.exitCode ?? '—'}
+                    </span>
+                  </span>
+                  {execOut.timedOut ? <span className="text-rose-300">timed out</span> : null}
+                </div>
+                <pre className="max-h-64 overflow-auto rounded-lg border border-white/10 bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-emerald-100/70">
+                  {execOut.output || '(no output)'}
+                </pre>
+              </div>
+            ) : (
+              <p className="text-[11px] text-stone-600">
+                One-shot exec inside the running container. Output is captured for 30s max.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1895,6 +2207,9 @@ function RealServiceView({
   const [info, setInfo] = useState<RealServiceInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [selected, setSelected] = useState<string | null>(null);
+  const logConsole = useLogConsole();
 
   const refresh = useCallback(() => {
     listServices(instance)
@@ -1914,20 +2229,31 @@ function RealServiceView({
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const act = async (action: 'start' | 'stop') => {
+  const act = async (action: 'start' | 'stop', instanceName?: string) => {
     setBusy(true);
     try {
       const next =
         action === 'start'
-          ? await startService(instance, service)
-          : await stopService(instance, service);
+          ? await startService(instance, service, instanceName)
+          : await stopService(instance, service, instanceName);
       setInfo(next);
-      notify(action === 'start' ? `${next.label} starting` : `${next.label} stopped`);
+      const suffix = instanceName ? ` (${instanceName})` : '';
+      notify(action === 'start' ? `${next.label}${suffix} starting` : `${next.label}${suffix} stopped`);
     } catch (err) {
       notify(err instanceof Error ? err.message : `failed to ${action} service`, 'err');
     } finally {
       setBusy(false);
     }
+  };
+
+  const createInstance = async () => {
+    const name = newName.trim();
+    if (!/^[a-z0-9][a-z0-9-]{0,20}$/.test(name)) {
+      notify('instance name: lowercase letters, digits and dashes (max 21 chars)', 'err');
+      return;
+    }
+    await act('start', name);
+    setNewName('');
   };
 
   if (!info) {
@@ -2032,7 +2358,147 @@ function RealServiceView({
         </section>
       ) : null}
 
-      {status !== 'stopped' ? <ServiceTerminal instance={instance} service={service} /> : null}
+      {(() => {
+        const instances = info.instances ?? [];
+        const running = instances.filter((inst) => inst.status !== 'stopped');
+        const selectedInst =
+          running.find((inst) => (inst.name ?? '') === (selected ?? '')) ??
+          running.find((inst) => inst.name === null) ??
+          running[0] ??
+          null;
+        return (
+          <>
+            <section>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+                  Instances
+                </h3>
+                <span className="text-[11px] text-stone-600">
+                  {running.length}/{instances.length || 1} running
+                </span>
+              </div>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {instances.map((inst) => {
+                  const key = inst.name ?? '__default__';
+                  const isSelected = selectedInst
+                    ? (selectedInst.name ?? '__default__') === key
+                    : false;
+                  return (
+                    <div
+                      key={key}
+                      className={`rounded-xl border p-3 transition ${
+                        isSelected
+                          ? 'border-amber-500/40 bg-amber-500/[0.04]'
+                          : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelected(inst.name ?? '')}
+                          className="flex min-w-0 items-center gap-2 text-left"
+                        >
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${SERVICE_STATUS_DOT[inst.status]}`}
+                          />
+                          <span className="truncate font-mono text-sm text-stone-100">
+                            {inst.name ?? 'default'}
+                          </span>
+                        </button>
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${SERVICE_STATUS_STYLE[inst.status]}`}
+                        >
+                          {inst.status}
+                        </span>
+                      </div>
+                      {inst.host ? (
+                        <p className="mt-1.5 truncate font-mono text-[11px] text-stone-500">
+                          {inst.host}
+                        </p>
+                      ) : null}
+                      {inst.statusDetail ? (
+                        <p className="mt-1.5 truncate font-mono text-[11px] text-rose-300">
+                          {inst.statusDetail}
+                        </p>
+                      ) : null}
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        {inst.status !== 'stopped' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                logConsole.open({
+                                  instance,
+                                  service: inst.serviceName,
+                                  label: `${info.label} / ${inst.name ?? 'default'}`,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-medium text-stone-300 transition hover:border-amber-400/40 hover:text-amber-200"
+                            >
+                              <ScrollText className="h-3 w-3" /> Logs
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => act('stop', inst.name ?? undefined)}
+                              disabled={busy}
+                              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-medium text-stone-300 transition hover:border-rose-400/40 hover:text-rose-200 disabled:opacity-50"
+                            >
+                              <Square className="h-3 w-3" /> Stop
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => act('start', inst.name ?? undefined)}
+                            disabled={busy}
+                            className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-medium text-stone-300 transition hover:border-emerald-400/40 hover:text-emerald-200 disabled:opacity-50"
+                          >
+                            <Play className="h-3 w-3" /> Start
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex flex-col justify-center gap-2 rounded-xl border border-dashed border-white/15 bg-transparent p-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-stone-600">
+                    New instance
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      value={newName}
+                      onChange={(event) => setNewName(event.target.value.toLowerCase())}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          void createInstance();
+                        }
+                      }}
+                      placeholder="replica-name"
+                      spellCheck={false}
+                      className="w-full min-w-0 rounded-lg border border-white/10 bg-stone-950 px-2.5 py-1.5 font-mono text-[11px] text-stone-200 outline-none transition focus:border-amber-500/50"
+                    />
+                    <PrimaryButton
+                      onClick={() => void createInstance()}
+                      disabled={busy || newName.trim().length === 0}
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                    </PrimaryButton>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {selectedInst ? (
+              <ServicePanel
+                key={`${instance}/${selectedInst.serviceName}`}
+                instance={instance}
+                target={selectedInst.serviceName}
+                label={`${info.label} / ${selectedInst.name ?? 'default'}`}
+              />
+            ) : null}
+          </>
+        );
+      })()}
     </div>
   );
 }

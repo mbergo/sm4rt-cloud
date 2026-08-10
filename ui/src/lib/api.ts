@@ -197,6 +197,15 @@ export const SERVICE_CATEGORIES = [
 ] as const;
 export type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
 
+export interface ServiceInstanceRef {
+  name: string | null;
+  serviceName: string;
+  status: RealServiceStatus;
+  statusDetail: string | null;
+  host: string | null;
+  externalUrl: string | null;
+}
+
 export interface RealServiceInfo {
   id: RealServiceId;
   label: string;
@@ -206,6 +215,7 @@ export interface RealServiceInfo {
   status: RealServiceStatus;
   statusDetail: string | null;
   endpoints: { label: string; value: string }[];
+  instances?: ServiceInstanceRef[];
 }
 
 export function isRealServiceId(value: string): value is RealServiceId {
@@ -263,17 +273,25 @@ export function getInstanceMetrics(instance: string): Promise<InstanceMetrics> {
   return request(`/api/instances/${instance}/metrics`);
 }
 
-export function startService(instance: string, service: RealServiceId): Promise<RealServiceInfo> {
+export function startService(
+  instance: string,
+  service: RealServiceId,
+  instanceName?: string,
+): Promise<RealServiceInfo> {
   return request(`/api/instances/${instance}/services/${service}/start`, {
     method: 'POST',
-    body: '{}',
+    body: JSON.stringify(instanceName ? { name: instanceName } : {}),
   });
 }
 
-export function stopService(instance: string, service: RealServiceId): Promise<RealServiceInfo> {
+export function stopService(
+  instance: string,
+  service: RealServiceId,
+  instanceName?: string,
+): Promise<RealServiceInfo> {
   return request(`/api/instances/${instance}/services/${service}/stop`, {
     method: 'POST',
-    body: '{}',
+    body: JSON.stringify(instanceName ? { name: instanceName } : {}),
   });
 }
 
@@ -283,6 +301,70 @@ export function getServiceLogs(
   tail = 200,
 ): Promise<{ logs: string }> {
   return request(`/api/instances/${instance}/services/${service}/logs?tail=${tail}`);
+}
+
+// — post-provision service panel (F0) —
+
+/** Live log streaming — SSE with token via query (EventSource can't set headers). */
+export async function openLogStream(
+  instance: string,
+  service: string,
+  tail = 200,
+): Promise<EventSource> {
+  const bearer = (tokenProvider ? await tokenProvider() : null) ?? getToken();
+  const qs = new URLSearchParams({ service, tail: String(tail) });
+  if (bearer) qs.set('access_token', bearer);
+  return new EventSource(`/api/instances/${instance}/logs/stream?${qs}`);
+}
+
+export interface ExecResult {
+  output: string;
+  exitCode: number | null;
+  timedOut?: boolean;
+}
+
+export function execCommand(instance: string, service: string, cmd: string[]): Promise<ExecResult> {
+  return request(`/api/instances/${instance}/exec`, {
+    method: 'POST',
+    body: JSON.stringify({ service, cmd }),
+  });
+}
+
+export interface ServiceConfigInfo {
+  serviceName: string;
+  image: string;
+  env: string[];
+  ports: { published: number | null; target: number; protocol: string }[];
+  mounts: { source: string; target: string; type: string }[];
+  labels: Record<string, string>;
+  replicas: number | null;
+}
+
+export function getServiceConfig(instance: string, target: string): Promise<ServiceConfigInfo> {
+  return request(`/api/instances/${instance}/services/${encodeURIComponent(target)}/config`);
+}
+
+export function putServiceEnv(
+  instance: string,
+  target: string,
+  env: string[],
+): Promise<ServiceConfigInfo> {
+  return request(`/api/instances/${instance}/services/${encodeURIComponent(target)}/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ env }),
+  });
+}
+
+export interface ServiceTargetInfo {
+  serviceName: string;
+  kind: 'catalog' | 'compute';
+  serviceId: string | null;
+  instanceLabel: string | null;
+  status: RealServiceStatus;
+}
+
+export function listServiceTargets(instance: string): Promise<{ targets: ServiceTargetInfo[] }> {
+  return request(`/api/instances/${instance}/targets`);
 }
 
 export type AgentRunStatus = 'pending' | 'running' | 'succeeded' | 'failed';

@@ -46,6 +46,21 @@ export interface ServiceEndpoint {
   value: string;
 }
 
+/** Instance names: short DNS-safe slugs (also embedded in swarm service names). */
+export const INSTANCE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,20}$/;
+
+/** One named (or default) deployment of a catalog service. */
+export interface ServiceInstanceRef {
+  /** null for the default (unnamed) instance */
+  name: string | null;
+  /** full swarm service name — target for logs/exec/config APIs */
+  serviceName: string;
+  status: RealServiceStatus;
+  statusDetail: string | null;
+  host: string;
+  externalUrl: string | null;
+}
+
 export interface RealServiceInfo {
   id: RealServiceId;
   label: string;
@@ -55,6 +70,8 @@ export interface RealServiceInfo {
   status: RealServiceStatus;
   statusDetail: string | null;
   endpoints: ServiceEndpoint[];
+  /** per-instance detail (swarm driver only) */
+  instances?: ServiceInstanceRef[];
 }
 
 interface EndpointContext {

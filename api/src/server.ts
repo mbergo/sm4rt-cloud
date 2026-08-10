@@ -9,7 +9,8 @@ import { isConflict, type CloudDriver, type InstanceInfo } from './driver.ts';
 import { isValidName, randomName } from './names.ts';
 import { ResourceGateway, isServiceId } from './resources.ts';
 import { EXPLORER_SERVICES, explore } from './explorer.ts';
-import { isRealServiceId } from './services.ts';
+import { isRealServiceId, INSTANCE_NAME_RE } from './services.ts';
+import { createLogDemuxer } from './swarm.ts';
 import { parseTlsAsk } from './caddy.ts';
 import { emit, subscribe } from './events.ts';
 import { ComputeManager } from './compute.ts';
@@ -497,7 +498,17 @@ app.post('/api/instances/:name/services/:service/start', async (request, reply) 
   if (!instance) {
     return reply.code(404).send({ error: 'instance not found' });
   }
-  await provisioner.startService(name, service);
+  const body = (request.body ?? {}) as { name?: string };
+  let instanceName: string | undefined;
+  if (body.name != null && body.name !== '') {
+    if (typeof body.name !== 'string' || !INSTANCE_NAME_RE.test(body.name)) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid instance name (lowercase letters, digits, dashes; max 21 chars)' });
+    }
+    instanceName = body.name;
+  }
+  await provisioner.startService(name, service, instanceName);
   return reply.code(202).send(await provisioner.getService(name, service));
 });
 
@@ -510,7 +521,15 @@ app.post('/api/instances/:name/services/:service/stop', async (request, reply) =
   if (!instance) {
     return reply.code(404).send({ error: 'instance not found' });
   }
-  await provisioner.stopService(name, service);
+  const body = (request.body ?? {}) as { name?: string };
+  let instanceName: string | undefined;
+  if (body.name != null && body.name !== '') {
+    if (typeof body.name !== 'string' || !INSTANCE_NAME_RE.test(body.name)) {
+      return reply.code(400).send({ error: 'invalid instance name' });
+    }
+    instanceName = body.name;
+  }
+  await provisioner.stopService(name, service, instanceName);
   return reply.code(202).send(await provisioner.getService(name, service));
 });
 
@@ -527,6 +546,151 @@ app.get('/api/instances/:name/services/:service/logs', async (request, reply) =>
   const tailLines = Math.min(Math.max(Number(tail ?? 200) || 200, 10), 2000);
   const logs = await provisioner.serviceLogs(name, service, tailLines);
   return { logs };
+});
+
+// — post-provision panel: streaming logs, exec, config, targets —
+
+const TARGET_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/;
+
+app.get('/api/instances/:name/logs/stream', async (request, reply) => {
+  const { name } = request.params as { name: string };
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  if (!provisioner.streamServiceLogs) {
+    return reply.code(501).send({ error: 'log streaming not supported on this backend' });
+  }
+  const { service, tail } = request.query as { service?: string; tail?: string };
+  if (!service || !TARGET_RE.test(service)) {
+    return reply.code(400).send({ error: 'missing or invalid ?service=' });
+  }
+  const tailLines = Math.min(Math.max(Number(tail ?? 200) || 200, 10), 2000);
+  let handle: { stream: NodeJS.ReadableStream; close: () => void };
+  try {
+    handle = await provisioner.streamServiceLogs(name, service, tailLines);
+  } catch (err) {
+    const code = (err as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(code).send({ error: (err as Error).message });
+  }
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  reply.raw.write(': connected\n\n');
+  const demux = createLogDemuxer();
+  handle.stream.on('data', (chunk: Buffer) => {
+    const text = demux.push(chunk);
+    if (text) {
+      reply.raw.write(`data: ${JSON.stringify({ chunk: text })}\n\n`);
+    }
+  });
+  const finish = () => {
+    reply.raw.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    reply.raw.end();
+  };
+  handle.stream.on('end', finish);
+  handle.stream.on('error', finish);
+  const keepalive = setInterval(() => {
+    reply.raw.write(': keepalive\n\n');
+  }, 15_000);
+  request.raw.on('close', () => {
+    clearInterval(keepalive);
+    handle.close();
+  });
+  return reply;
+});
+
+app.post('/api/instances/:name/exec', async (request, reply) => {
+  const { name } = request.params as { name: string };
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  if (!provisioner.execInService) {
+    return reply.code(501).send({ error: 'exec not supported on this backend' });
+  }
+  const body = (request.body ?? {}) as { service?: string; cmd?: unknown };
+  if (!body.service || !TARGET_RE.test(body.service)) {
+    return reply.code(400).send({ error: 'missing or invalid "service"' });
+  }
+  const cmd = body.cmd;
+  if (
+    !Array.isArray(cmd) ||
+    cmd.length < 1 ||
+    cmd.length > 64 ||
+    !cmd.every((c) => typeof c === 'string' && c.length <= 4096)
+  ) {
+    return reply.code(400).send({ error: '"cmd" must be an array of 1–64 strings' });
+  }
+  try {
+    return await provisioner.execInService(name, body.service, cmd as string[]);
+  } catch (err) {
+    const code = (err as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(code).send({ error: (err as Error).message });
+  }
+});
+
+app.get('/api/instances/:name/services/:target/config', async (request, reply) => {
+  const { name, target } = request.params as { name: string; target: string };
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  if (!provisioner.getServiceConfig || !TARGET_RE.test(target)) {
+    return reply.code(!provisioner.getServiceConfig ? 501 : 400).send({
+      error: provisioner.getServiceConfig ? 'invalid target' : 'not supported on this backend',
+    });
+  }
+  try {
+    return await provisioner.getServiceConfig(name, target);
+  } catch (err) {
+    const code = (err as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(code).send({ error: (err as Error).message });
+  }
+});
+
+app.put('/api/instances/:name/services/:target/config', async (request, reply) => {
+  const { name, target } = request.params as { name: string; target: string };
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  if (!provisioner.updateServiceEnv || !provisioner.getServiceConfig || !TARGET_RE.test(target)) {
+    return reply.code(!provisioner.updateServiceEnv ? 501 : 400).send({
+      error: provisioner.updateServiceEnv ? 'invalid target' : 'not supported on this backend',
+    });
+  }
+  const body = (request.body ?? {}) as { env?: unknown };
+  const env = body.env;
+  if (
+    !Array.isArray(env) ||
+    env.length > 128 ||
+    !env.every((e) => typeof e === 'string' && e.length <= 8192 && e.includes('='))
+  ) {
+    return reply.code(400).send({ error: '"env" must be an array of KEY=value strings (max 128)' });
+  }
+  try {
+    await provisioner.updateServiceEnv(name, target, env as string[]);
+    return await provisioner.getServiceConfig(name, target);
+  } catch (err) {
+    const code = (err as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(code).send({ error: (err as Error).message });
+  }
+});
+
+app.get('/api/instances/:name/targets', async (request, reply) => {
+  const { name } = request.params as { name: string };
+  const instance = await requireRunningInstance(name);
+  if (!instance) {
+    return reply.code(404).send({ error: 'instance not found' });
+  }
+  if (!provisioner.listServiceTargets) {
+    return reply.code(501).send({ error: 'not supported on this backend' });
+  }
+  return { targets: await provisioner.listServiceTargets(name) };
 });
 
 const AGENT_REPO_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+?(\.git)?$/;

@@ -2,11 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  INSTANCE_NAME_RE,
   REAL_SERVICES,
   SERVICE_CATALOG,
   SERVICE_CATEGORIES,
   isRealServiceId,
 } from '../src/services.ts';
+import { createLogDemuxer } from '../src/swarm.ts';
 
 test('catalog covers every REAL_SERVICES id with a consistent spec', () => {
   for (const id of REAL_SERVICES) {
@@ -80,4 +82,40 @@ test('endpoints render with and without an external url', () => {
       assert.ok(e.label.length > 0 && e.value.length > 0, `${id} endpoint fields`);
     }
   }
+});
+
+test('INSTANCE_NAME_RE accepts short kebab names and rejects bad input', () => {
+  for (const ok of ['a', 'blue', 'replica-2', 'a1-b2', 'x'.repeat(21)]) {
+    assert.ok(INSTANCE_NAME_RE.test(ok), `should accept ${ok}`);
+  }
+  for (const bad of ['', '-lead', 'UPPER', 'has space', 'dot.name', 'x'.repeat(22), 'ünïcode']) {
+    assert.ok(!INSTANCE_NAME_RE.test(bad), `should reject ${bad}`);
+  }
+});
+
+test('createLogDemuxer reassembles multiplexed frames split across chunks', () => {
+  const frame = (stream: number, text: string) => {
+    const payload = Buffer.from(text, 'utf8');
+    const head = Buffer.alloc(8);
+    head[0] = stream;
+    head.writeUInt32BE(payload.length, 4);
+    return Buffer.concat([head, payload]);
+  };
+  const whole = Buffer.concat([frame(1, 'hello '), frame(2, 'world'), frame(1, '!\n')]);
+  // Split at awkward byte boundaries (inside headers and payloads).
+  for (const cut of [1, 3, 9, 13]) {
+    const demux = createLogDemuxer();
+    let out = '';
+    out += demux.push(whole.subarray(0, cut));
+    out += demux.push(whole.subarray(cut));
+    assert.equal(out, 'hello world!\n', `cut at ${cut}`);
+  }
+});
+
+test('createLogDemuxer passes raw TTY streams through unchanged', () => {
+  const demux = createLogDemuxer();
+  let out = '';
+  out += demux.push(Buffer.from('plain tty '));
+  out += demux.push(Buffer.from('output\n'));
+  assert.equal(out, 'plain tty output\n');
 });
