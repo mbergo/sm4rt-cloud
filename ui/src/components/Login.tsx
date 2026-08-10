@@ -8,7 +8,7 @@ export default function Login() {
         <BrandMark size="lg" />
         <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">SM4RT-CLOUD</h1>
         <p className="mt-1.5 text-sm text-stone-400">
-          On-demand AWS environments, running on your AKS cluster.
+          Your own cloud — services, compute and storage on your infrastructure.
         </p>
       </div>
       <div className="animate-rise-in">

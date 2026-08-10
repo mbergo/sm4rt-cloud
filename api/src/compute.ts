@@ -122,6 +122,8 @@ interface SvcRaw {
 export interface ComputeOptions {
   instanceDomain: string;
   tls: boolean;
+  /** Returns the verified custom domain set as default for a workspace, or null for the platform domain. */
+  domainFor?: (ws: string) => string | null;
 }
 
 export interface VmInfo {
@@ -278,8 +280,16 @@ export class ComputeManager {
   private publicHost(sub: string): string {
     return `${sub}.${this.opts.instanceDomain}`;
   }
+  /**
+   * Public hostname for a workspace resource. Platform domain → `<prefix>.<ws>.<instanceDomain>`;
+   * verified custom default domain → `<prefix>.<customDomain>`.
+   */
+  hostFor(ws: string, prefix: string): string {
+    const custom = this.opts.domainFor?.(ws) ?? null;
+    return custom ? `${prefix}.${custom}` : this.publicHost(`${prefix}.${ws}`);
+  }
   taskUrl(ws: string, task: string): string {
-    return `${this.scheme()}://${this.publicHost(`${task}.${ws}`)}`;
+    return `${this.scheme()}://${this.hostFor(ws, task)}`;
   }
 
   private caddyLabels(host: string, port: number, idx = 0): Record<string, string> {
@@ -713,7 +723,7 @@ export class ComputeManager {
     if (input.gitopsApp) labels['sm4rt.gitops.app'] = input.gitopsApp;
     if (input.gitopsRev) labels['sm4rt.gitops.rev'] = input.gitopsRev;
     if (input.port) {
-      Object.assign(labels, this.caddyLabels(this.publicHost(`${input.name}.${ws}`), input.port));
+      Object.assign(labels, this.caddyLabels(this.hostFor(ws, input.name), input.port));
     }
     const cpus = input.cpus ?? TASK_PLANS[plan].cpus;
     const memoryMb = input.memoryMb ?? TASK_PLANS[plan].memoryMb;
@@ -1090,7 +1100,7 @@ export class ComputeManager {
     return {
       name: m.name,
       state,
-      url: `${this.scheme()}://${this.publicHost(`${m.name}-gw.${ws}`)}`,
+      url: `${this.scheme()}://${this.hostFor(ws, `${m.name}-gw`)}`,
       routes: m.routes ?? [],
       createdAt: svc.CreatedAt ?? null,
     };
@@ -1146,7 +1156,7 @@ export class ComputeManager {
         [SM4RT_WS_LABEL]: ws,
         [SM4RT_NAME_LABEL]: input.name,
         [SM4RT_META_LABEL]: JSON.stringify(meta),
-        ...this.caddyLabels(this.publicHost(`${input.name}-gw.${ws}`), 8080),
+        ...this.caddyLabels(this.hostFor(ws, `${input.name}-gw`), 8080),
       },
       TaskTemplate: {
         ContainerSpec: {
@@ -1217,7 +1227,7 @@ export class ComputeManager {
     return {
       name: m.name,
       state,
-      url: `${this.scheme()}://${this.publicHost(`${m.name}-cdn.${ws}`)}`,
+      url: `${this.scheme()}://${this.hostFor(ws, `${m.name}-cdn`)}`,
       origin: m.origin,
       ttlSeconds: m.ttl,
       memory: m.memory,
@@ -1296,7 +1306,7 @@ export class ComputeManager {
         [SM4RT_WS_LABEL]: ws,
         [SM4RT_NAME_LABEL]: input.name,
         [SM4RT_META_LABEL]: JSON.stringify(meta),
-        ...this.caddyLabels(this.publicHost(`${input.name}-cdn.${ws}`), 80),
+        ...this.caddyLabels(this.hostFor(ws, `${input.name}-cdn`), 80),
       },
       TaskTemplate: {
         ContainerSpec: {
@@ -1364,7 +1374,7 @@ export class ComputeManager {
             const record = k.slice('sm4rt.dns.'.length);
             out.push({
               record,
-              fqdn: this.publicHost(`${record}.${ws}`),
+              fqdn: this.hostFor(ws, record),
               type: 'ALIAS',
               target: rec.target,
               informational: false,
@@ -1383,7 +1393,7 @@ export class ComputeManager {
           const record = k.slice('sm4rt.dnsinfo.'.length);
           out.push({
             record,
-            fqdn: this.publicHost(`${record}.${ws}`),
+            fqdn: this.hostFor(ws, record),
             type: rec.type,
             target: rec.target,
             informational: true,
@@ -1423,7 +1433,7 @@ export class ComputeManager {
       if (!m.port) throw new ComputeError(400, `task "${input.target}" exposes no HTTP port`);
       const spec = svc.Spec as Record<string, any>;
       const idx = this.nextCaddyIdx(spec.Labels ?? {});
-      const host = this.publicHost(`${input.record}.${ws}`);
+      const host = this.hostFor(ws, input.record);
       Object.assign(spec.Labels, this.caddyLabels(host, m.port, idx));
       spec.Labels[`sm4rt.dns.${input.record}`] = JSON.stringify({
         type: 'ALIAS',
@@ -1450,7 +1460,7 @@ export class ComputeManager {
     await this.docker.getService(inst.Spec.Name).update({ version: inst.Version.Index, ...spec });
     return {
       record: input.record,
-      fqdn: this.publicHost(`${input.record}.${ws}`),
+      fqdn: this.hostFor(ws, input.record),
       type: type as DnsRecord['type'],
       target: input.target,
       informational: true,
@@ -1499,10 +1509,10 @@ export class ComputeManager {
     const ws = svc.Spec.Labels?.[SM4RT_WS_LABEL] ?? '';
     return {
       state,
-      grafanaUrl: `${this.scheme()}://${this.publicHost(`obs.${ws}`)}`,
+      grafanaUrl: `${this.scheme()}://${this.hostFor(ws, 'obs')}`,
       grafanaUser: 'admin',
       grafanaPassword: m.grafanaPass,
-      otlpUrl: `${this.scheme()}://${this.publicHost(`otlp.${ws}`)}`,
+      otlpUrl: `${this.scheme()}://${this.hostFor(ws, 'otlp')}`,
       otlpInternal: `http://${this.obsService(ws)}:4318`,
       scrapeTargets: targets,
       createdAt: svc.CreatedAt ?? null,
@@ -1542,8 +1552,8 @@ export class ComputeManager {
       [SM4RT_WS_LABEL]: ws,
       [SM4RT_NAME_LABEL]: 'obs',
       [SM4RT_META_LABEL]: JSON.stringify(meta),
-      ...this.caddyLabels(this.publicHost(`obs.${ws}`), 3000, 0),
-      ...this.caddyLabels(this.publicHost(`otlp.${ws}`), 4318, 1),
+      ...this.caddyLabels(this.hostFor(ws, 'obs'), 3000, 0),
+      ...this.caddyLabels(this.hostFor(ws, 'otlp'), 4318, 1),
     };
     await this.docker.createService({
       Name: obsName,
@@ -1737,5 +1747,38 @@ export class ComputeManager {
   }
   publicHostFor(sub: string): string {
     return this.publicHost(sub);
+  }
+
+  /**
+   * Re-labels every public endpoint of a workspace after its default domain
+   * changed. Each `caddy`/`caddy_N` host label keeps its first DNS label
+   * (task name, `<x>-gw`, `<x>-cdn`, `obs`, `otlp`, dns record, `git`, `ci`)
+   * and is rebased onto the current default domain via hostFor().
+   */
+  async applyDomain(ws: string): Promise<{ services: number; hosts: string[] }> {
+    const svcs = await this.listByLabels([`${SM4RT_WS_LABEL}=${ws}`]);
+    const hosts = new Set<string>();
+    let touched = 0;
+    for (const s of svcs) {
+      const spec = s.Spec as Record<string, any>;
+      const labels: Record<string, string> = spec.Labels ?? {};
+      let changed = false;
+      for (const key of Object.keys(labels)) {
+        if (!/^caddy(_\d+)?$/.test(key)) continue;
+        const prefix = labels[key].replace(/^https?:\/\//, '').split('.')[0];
+        if (!prefix) continue;
+        const next = this.hostFor(ws, prefix);
+        const value = this.opts.tls ? next : `http://${next}`;
+        hosts.add(next);
+        if (labels[key] !== value) {
+          labels[key] = value;
+          changed = true;
+        }
+      }
+      if (!changed) continue;
+      touched++;
+      await this.docker.getService(s.Spec.Name).update({ version: s.Version.Index, ...spec });
+    }
+    return { services: touched, hosts: [...hosts].sort() };
   }
 }

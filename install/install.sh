@@ -70,6 +70,13 @@ fi
 if [ -z "$CLOUD_TOKEN" ]; then
   CLOUD_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
 fi
+# Optional integrations (set via environment before running the installer):
+#   DATABASE_URL           Postgres for users/domains persistence (default: JSON file volume)
+#   CLERK_SECRET_KEY /     Clerk authentication (Google/GitHub/password sign-in);
+#   CLERK_PUBLISHABLE_KEY  when unset the console uses token login only.
+DATABASE_URL="${DATABASE_URL:-}"
+CLERK_SECRET_KEY="${CLERK_SECRET_KEY:-}"
+CLERK_PUBLISHABLE_KEY="${CLERK_PUBLISHABLE_KEY:-}"
 CONSOLE_HOST="cloud.${INSTANCE_DOMAIN}"
 case "$ENABLE_TLS" in
   [Yy]*|true) INSTANCE_TLS=true; SCHEME=https ;;
@@ -300,6 +307,9 @@ docker service create --name floci-cloud \
   ${REGISTRY_USER:+--env REGISTRY_USER="$REGISTRY_USER"} \
   ${REGISTRY_PASS:+--env REGISTRY_PASS="$REGISTRY_PASS"} \
   ${REGISTRY_USER:+--env REGISTRY_SERVER="$REGISTRY_SERVER"} \
+  ${DATABASE_URL:+--env DATABASE_URL="$DATABASE_URL"} \
+  ${CLERK_SECRET_KEY:+--env CLERK_SECRET_KEY="$CLERK_SECRET_KEY"} \
+  ${CLERK_PUBLISHABLE_KEY:+--env CLERK_PUBLISHABLE_KEY="$CLERK_PUBLISHABLE_KEY"} \
   --with-registry-auth \
   --restart-condition any \
   "$FLOCI_CLOUD_IMAGE" >/dev/null

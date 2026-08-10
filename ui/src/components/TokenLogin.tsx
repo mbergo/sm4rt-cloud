@@ -41,7 +41,7 @@ export default function TokenLogin({ onSignedIn }: { onSignedIn: () => void }) {
         <BrandMark size="lg" />
         <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">SM4RT-CLOUD</h1>
         <p className="mt-1.5 text-sm text-stone-400">
-          Your own cloud on {config.instanceDomain} · driver: {config.driver}
+          Your own cloud on {config.instanceDomain}
         </p>
       </div>
       <form

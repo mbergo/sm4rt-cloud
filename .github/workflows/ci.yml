@@ -31,13 +31,16 @@ jobs:
           npx -y -p typescript@5.7.2 tsc --noEmit --allowImportingTsExtensions
           --module nodenext --target es2022 --moduleResolution nodenext --skipLibCheck
           src/server.ts src/k8s.ts src/resources.ts src/services.ts
-          tests/names.test.ts tests/resources.test.ts tests/e2e-kind.test.ts tests/json-body.test.ts
+          tests/names.test.ts tests/resources.test.ts tests/e2e-kind.test.ts tests/json-body.test.ts tests/domains.test.ts
         working-directory: api
       - name: unit tests (names)
         run: node --test tests/names.test.ts
         working-directory: api
       - name: unit tests (json body parser)
         run: node --test tests/json-body.test.ts
+        working-directory: api
+      - name: unit tests (domains)
+        run: node --test tests/domains.test.ts
         working-directory: api
       - name: install ui deps
         run: npm ci
