@@ -15,6 +15,7 @@ import { parseTlsAsk } from './caddy.ts';
 import { emit, subscribe } from './events.ts';
 import { ComputeManager } from './compute.ts';
 import { DevopsManager } from './devops.ts';
+import { RegistryManager } from './registry.ts';
 import { registerComputeRoutes } from './compute-routes.ts';
 import { Store } from './db.ts';
 import { registerDomainRoutes } from './domains.ts';
@@ -89,6 +90,7 @@ const compute = new ComputeManager({
   domainFor: (ws) => store.getDefaultDomain(ws),
 });
 const devops = new DevopsManager(compute);
+const registry = new RegistryManager(compute);
 if (computeEnabled) {
   devops.startReconciler(async () => (await provisioner.list()).map((i) => i.name));
 }
@@ -422,6 +424,7 @@ app.delete('/api/instances/:name', async (request, reply) => {
   if (computeEnabled) {
     // best-effort cleanup of sm4rt compute workloads owned by this workspace
     await devops.disable(name).catch(() => {});
+    await registry.disable(name).catch(() => {});
     await compute.deleteAllFor(name).catch((err) => {
       request.log.warn({ err, ws: name }, 'compute cleanup failed');
     });
@@ -458,6 +461,7 @@ async function requireRunningInstance(name: string): Promise<InstanceInfo | null
 registerComputeRoutes(app, {
   compute,
   devops,
+  registry,
   requireInstance: requireRunningInstance,
   enabled: computeEnabled,
 });

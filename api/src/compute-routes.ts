@@ -4,11 +4,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ComputeError, type ComputeManager } from './compute.ts';
 import type { DevopsManager } from './devops.ts';
+import type { RegistryManager } from './registry.ts';
 import type { GatewayRoute } from './compute-templates.ts';
 
 export interface ComputeRouteDeps {
   compute: ComputeManager;
   devops: DevopsManager;
+  registry: RegistryManager;
   /** resolves the workspace or null when it does not exist */
   requireInstance: (name: string) => Promise<unknown | null>;
   /** compute is swarm-only; other drivers get an honest 501 */
@@ -31,7 +33,7 @@ function tailFrom(req: Req): number {
 }
 
 export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDeps): void {
-  const { compute, devops } = deps;
+  const { compute, devops, registry } = deps;
   const base = '/api/instances/:name/compute';
 
   /** shared preamble: 501 off-swarm, 404 unknown workspace, then run + map errors */
@@ -348,6 +350,29 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     route(async (ws, req, reply) => {
       const { appName } = req.params as { appName: string };
       await devops.removeApp(ws, appName);
+      return reply.code(204).send();
+    }),
+  );
+
+  // — Container Registry: real registry:2 per workspace (docker login/push/pull) —
+  app.get(`${base}/registry`, route(async (ws) => registry.status(ws)));
+  app.post(
+    `${base}/registry`,
+    route(async (ws, _req, reply) => reply.code(201).send(await registry.enable(ws))),
+  );
+  app.delete(
+    `${base}/registry`,
+    route(async (ws, _req, reply) => {
+      await registry.disable(ws);
+      return reply.code(204).send();
+    }),
+  );
+  app.get(`${base}/registry/repos`, route(async (ws) => ({ repos: await registry.listRepos(ws) })));
+  app.delete(
+    `${base}/registry/repos/:repo/tags/:tag`,
+    route(async (ws, req, reply) => {
+      const { repo, tag } = req.params as { repo: string; tag: string };
+      await registry.deleteTag(ws, decodeURIComponent(repo), tag);
       return reply.code(204).send();
     }),
   );

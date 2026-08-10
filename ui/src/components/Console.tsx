@@ -134,9 +134,11 @@ import {
   DnsPage,
   GatewaysPage,
   ObservabilityPage,
+  RegistryPage,
   ServersPage,
 } from './Compute';
 import { computeSummary } from '../lib/compute';
+import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
 
@@ -292,28 +294,7 @@ function useRegion(): Region {
 }
 
 // — shared log console (single dock at the bottom, one stream at a time) —
-
-interface LogTarget {
-  instance: string;
-  service: string;
-  label: string;
-}
-
-interface LogConsoleApi {
-  open: (target: LogTarget) => void;
-  close: () => void;
-  target: LogTarget | null;
-}
-
-const LogConsoleContext = createContext<LogConsoleApi>({
-  open: () => {},
-  close: () => {},
-  target: null,
-});
-
-function useLogConsole(): LogConsoleApi {
-  return useContext(LogConsoleContext);
-}
+// Context lives in ../lib/log-console.ts so Compute.tsx pages can use it too.
 
 const LOG_BUFFER_MAX = 2000;
 
@@ -629,6 +610,8 @@ export default function Console({
           <ObservabilityPage instance={name} notify={notify} />
         ) : section === 'devops' ? (
           <DevopsPage instance={name} notify={notify} />
+        ) : section === 'ecr' ? (
+          <RegistryPage instance={name} notify={notify} />
         ) : (
           <RegionContext.Provider value={region}>
             <ServiceView key={`${section}:${region}`} instance={name} service={section} notify={notify} />
