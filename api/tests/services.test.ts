@@ -8,7 +8,7 @@ import {
   SERVICE_CATEGORIES,
   isRealServiceId,
 } from '../src/services.ts';
-import { createLogDemuxer } from '../src/swarm.ts';
+import { createLogDemuxer, agentTaskAddress } from '../src/swarm.ts';
 
 test('catalog covers every REAL_SERVICES id with a consistent spec', () => {
   for (const id of REAL_SERVICES) {
@@ -118,4 +118,45 @@ test('createLogDemuxer passes raw TTY streams through unchanged', () => {
   out += demux.push(Buffer.from('plain tty '));
   out += demux.push(Buffer.from('output\n'));
   assert.equal(out, 'plain tty output\n');
+});
+
+test('agentTaskAddress picks the running agent task on the right node and strips CIDR', () => {
+  const tasks = [
+    {
+      NodeID: 'node-a',
+      Status: { State: 'running' },
+      NetworksAttachments: [
+        { Network: { Spec: { Name: 'other-net' } }, Addresses: ['10.9.9.9/24'] },
+        { Network: { Spec: { Name: 'floci-net' } }, Addresses: ['10.0.1.5/24'] },
+      ],
+    },
+    {
+      NodeID: 'node-b',
+      Status: { State: 'running' },
+      NetworksAttachments: [
+        { Network: { Spec: { Name: 'floci-net' } }, Addresses: ['10.0.1.7/24'] },
+      ],
+    },
+    // failed task on node-b must be ignored
+    {
+      NodeID: 'node-b',
+      Status: { State: 'failed' },
+      NetworksAttachments: [
+        { Network: { Spec: { Name: 'floci-net' } }, Addresses: ['10.0.1.99/24'] },
+      ],
+    },
+  ];
+  assert.equal(agentTaskAddress(tasks, 'node-a', 'floci-net'), '10.0.1.5');
+  assert.equal(agentTaskAddress(tasks, 'node-b', 'floci-net'), '10.0.1.7');
+  assert.equal(agentTaskAddress(tasks, 'node-c', 'floci-net'), null);
+  assert.equal(agentTaskAddress([], 'node-a', 'floci-net'), null);
+  // task without addresses yields null rather than empty string
+  assert.equal(
+    agentTaskAddress(
+      [{ NodeID: 'x', Status: { State: 'running' }, NetworksAttachments: [] }],
+      'x',
+      'floci-net',
+    ),
+    null,
+  );
 });

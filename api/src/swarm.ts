@@ -34,6 +34,9 @@ import { emit } from './events.ts';
 const NETWORK_NAME = process.env.SWARM_NETWORK ?? 'floci-net';
 const SERVICE_PREFIX = 'floci-i-';
 const MANAGED_BY = 'floci-cloud';
+const EXEC_AGENT_SERVICE = 'floci-exec-agent';
+const EXEC_AGENT_LABEL = 'floci.cloud/component';
+const EXEC_AGENT_PORT = 8080;
 const MANAGED_LABEL = 'floci.cloud/managed-by';
 const INSTANCE_LABEL = 'floci.cloud/instance';
 const SERVICE_LABEL = 'floci.cloud/service';
@@ -78,6 +81,34 @@ interface TaskSummary {
   error: string | null;
   createdAt: string | null;
   containerId: string | null;
+  nodeId: string | null;
+}
+
+/**
+ * Pick the overlay-network IP of the exec-agent task running on `nodeId`.
+ * Pure helper (exported for tests): takes raw swarm task objects and returns
+ * the bare IP (addresses come as CIDR, e.g. "10.0.1.5/24") or null.
+ */
+export function agentTaskAddress(
+  tasks: Array<Record<string, any>>,
+  nodeId: string,
+  networkName: string,
+): string | null {
+  for (const t of tasks) {
+    if (String(t.NodeID ?? '') !== nodeId || String(t.Status?.State ?? '') !== 'running') {
+      continue;
+    }
+    for (const att of (t.NetworksAttachments ?? []) as Array<Record<string, any>>) {
+      if (String(att.Network?.Spec?.Name ?? '') !== networkName) {
+        continue;
+      }
+      const addr = String((att.Addresses ?? [])[0] ?? '');
+      if (addr) {
+        return addr.split('/')[0] ?? null;
+      }
+    }
+  }
+  return null;
 }
 
 function cpuToNano(cpu: string): number {
@@ -169,6 +200,7 @@ export class SwarmDriver implements CloudDriver {
   readonly kind = 'swarm' as const;
   private docker: Docker;
   private networkReady = false;
+  private selfNodeId: string | null | undefined; // undefined = not fetched yet
   private opts: SwarmDriverOptions;
 
   constructor(opts: SwarmDriverOptions) {
@@ -289,6 +321,7 @@ export class SwarmDriver implements CloudDriver {
       containerId: task.Status?.ContainerStatus?.ContainerID
         ? String(task.Status.ContainerStatus.ContainerID)
         : null,
+      nodeId: task.NodeID ? String(task.NodeID) : null,
     };
   }
 
@@ -884,6 +917,12 @@ export class SwarmDriver implements CloudDriver {
       err.statusCode = 409;
       throw err;
     }
+    // Multi-node swarm: the local docker.sock only reaches containers on this
+    // node. If the task landed elsewhere, relay through the per-node exec agent.
+    const selfNode = await this.getSelfNodeId();
+    if (task.nodeId && selfNode && task.nodeId !== selfNode) {
+      return this.execViaAgent(task.nodeId, task.containerId, cmd, timeoutMs);
+    }
     const container = this.docker.getContainer(task.containerId);
     const exec = await container.exec({
       Cmd: cmd,
@@ -928,6 +967,144 @@ export class SwarmDriver implements CloudDriver {
       }
     }
     return { output, exitCode, timedOut };
+  }
+
+  private async getSelfNodeId(): Promise<string | null> {
+    if (this.selfNodeId !== undefined) {
+      return this.selfNodeId;
+    }
+    try {
+      const info = (await this.docker.info()) as Record<string, any>;
+      this.selfNodeId = info?.Swarm?.NodeID ? String(info.Swarm.NodeID) : null;
+    } catch {
+      this.selfNodeId = null;
+    }
+    return this.selfNodeId;
+  }
+
+  /** Relay an exec to the floci-exec-agent task on the container's node. */
+  private async execViaAgent(
+    nodeId: string,
+    containerId: string,
+    cmd: string[],
+    timeoutMs: number,
+  ): Promise<{ output: string; exitCode: number | null; timedOut: boolean }> {
+    const tasks = (await this.docker.listTasks({
+      filters: JSON.stringify({
+        service: [EXEC_AGENT_SERVICE],
+        'desired-state': ['running'],
+      }),
+    })) as Array<Record<string, any>>;
+    const ip = agentTaskAddress(tasks, nodeId, NETWORK_NAME);
+    if (!ip) {
+      const err = new Error(
+        `container runs on another node and no exec agent is available there (node ${nodeId})`,
+      ) as Error & { statusCode: number };
+      err.statusCode = 502;
+      throw err;
+    }
+    const token = process.env.FLOCI_CLOUD_TOKEN ?? '';
+    let res: Response;
+    try {
+      res = await fetch(`http://${ip}:${EXEC_AGENT_PORT}/agent/exec`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ containerId, cmd }),
+        signal: AbortSignal.timeout(timeoutMs + 5_000),
+      });
+    } catch (e) {
+      const err = new Error(
+        `exec agent unreachable at ${ip}: ${e instanceof Error ? e.message : String(e)}`,
+      ) as Error & { statusCode: number };
+      err.statusCode = 502;
+      throw err;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const err = new Error(`exec agent error ${res.status}: ${body.slice(0, 200)}`) as Error & {
+        statusCode: number;
+      };
+      err.statusCode = 502;
+      throw err;
+    }
+    const data = (await res.json()) as {
+      output?: unknown;
+      exitCode?: unknown;
+      timedOut?: unknown;
+    };
+    return {
+      output: typeof data.output === 'string' ? data.output : '',
+      exitCode: typeof data.exitCode === 'number' ? data.exitCode : null,
+      timedOut: data.timedOut === true,
+    };
+  }
+
+  /**
+   * Ensure the global floci-exec-agent service exists and runs the same image
+   * as this API (one task per node, local docker.sock). Called at boot;
+   * updates the service when the image digest changes so agents follow deploys.
+   */
+  async ensureExecAgent(): Promise<void> {
+    await this.ensureNetwork();
+    const image = await this.selfImageRef();
+    const spec: Record<string, any> = {
+      Name: EXEC_AGENT_SERVICE,
+      Labels: { [EXEC_AGENT_LABEL]: 'exec-agent' },
+      TaskTemplate: {
+        ContainerSpec: {
+          Image: image,
+          Command: ['node', 'src/agent/exec-agent.ts'],
+          User: '0',
+          Env: [`FLOCI_CLOUD_TOKEN=${process.env.FLOCI_CLOUD_TOKEN ?? ''}`],
+          Mounts: [
+            { Type: 'bind', Source: DOCKER_SOCK, Target: '/var/run/docker.sock' },
+          ],
+        },
+        RestartPolicy: { Condition: 'any', Delay: 5_000_000_000 },
+        Networks: [{ Target: NETWORK_NAME }],
+      },
+      Mode: { Global: {} },
+    };
+    const existing = (await this.docker.listServices({
+      filters: JSON.stringify({ name: [EXEC_AGENT_SERVICE] }),
+    })) as Array<Record<string, any>>;
+    const current = existing.find((s) => s.Spec?.Name === EXEC_AGENT_SERVICE);
+    if (!current) {
+      await this.createSwarmService(spec as Docker.CreateServiceOptions);
+      return;
+    }
+    const currentImage = String(current.Spec?.TaskTemplate?.ContainerSpec?.Image ?? '');
+    if (currentImage === image) {
+      return;
+    }
+    const service = this.docker.getService(String(current.ID));
+    const inspected = (await service.inspect()) as Record<string, any>;
+    await service.update({
+      version: Number(inspected.Version?.Index ?? 0),
+      ...spec,
+    } as Record<string, any>);
+  }
+
+  /**
+   * Image reference for the exec agent. Prefer a registry-pullable digest of
+   * *this* container's image (RepoDigests) — a bare image ID is node-local and
+   * unusable on other nodes. Falls back to env/latest tag.
+   */
+  private async selfImageRef(): Promise<string> {
+    const fallback = process.env.FLOCI_AGENT_IMAGE ?? 'ghcr.io/mbergo/sm4rt-cloud:latest';
+    try {
+      const hostname = process.env.HOSTNAME ?? '';
+      if (!hostname) {
+        return fallback;
+      }
+      const me = await this.docker.getContainer(hostname).inspect();
+      const imageId = me.Image;
+      const img = (await this.docker.getImage(imageId).inspect()) as Record<string, any>;
+      const digest = (img.RepoDigests ?? [])[0];
+      return typeof digest === 'string' && digest.length > 0 ? digest : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   async getServiceConfig(name: string, target: string): Promise<ServiceConfigInfo> {
