@@ -142,16 +142,34 @@ export class MarketplaceManager {
     return uuid;
   }
 
+  /** Any real project uuid — needed because Coolify validates the project before the type. */
+  private async anyProjectUuid(): Promise<string> {
+    const { status, json } = await this.api('GET', '/projects');
+    if (status === 200 && Array.isArray(json) && json.length > 0) {
+      return (json[0] as { uuid: string }).uuid;
+    }
+    const created = await this.api('POST', '/projects', {
+      name: 'sm4rt-catalog',
+      description: 'sm4rt-cloud catalog probe project',
+    });
+    const uuid = (created.json as { uuid?: string })?.uuid;
+    if (!uuid) throw new MarketplaceError(502, 'could not resolve a coolify project for the catalog probe');
+    return uuid;
+  }
+
   /** Valid one-click types, probed from the create-service validation error. */
   async listTemplates(): Promise<string[]> {
     if (this.templates && Date.now() - this.templatesAt < TEMPLATE_CACHE_MS) {
       return this.templates;
     }
-    const server = await this.ensureServerUuid();
+    const [server, project] = await Promise.all([
+      this.ensureServerUuid(),
+      this.anyProjectUuid(),
+    ]);
     const { json } = await this.api('POST', '/services', {
       type: 'sm4rt-catalog-probe',
       server_uuid: server,
-      project_uuid: 'sm4rt-catalog-probe',
+      project_uuid: project,
       environment_name: 'production',
     });
     const types = (json as { valid_service_types?: string[] })?.valid_service_types;

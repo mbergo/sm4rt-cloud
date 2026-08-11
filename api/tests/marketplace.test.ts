@@ -51,6 +51,7 @@ test('listTemplates probes the create endpoint and caches the catalog', async ()
   let probes = 0;
   const { impl } = mockFetch({
     'GET /api/v1/servers': () => ({ status: 200, body: [{ uuid: 'srv-1' }] }),
+    'GET /api/v1/projects': () => ({ status: 200, body: [{ uuid: 'proj-any', name: 'Main' }] }),
     'POST /api/v1/services': () => {
       probes += 1;
       return { status: 422, body: { valid_service_types: ['uptime-kuma', 'gitea'] } };
