@@ -371,7 +371,7 @@ function LogDock({ target, onClose }: { target: LogTarget; onClose: () => void }
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-stone-950/95 shadow-[0_-8px_30px_rgba(0,0,0,0.5)] backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2">
+      <div className="flex w-full items-center justify-between gap-3 px-6 py-2">
         <div className="flex min-w-0 items-center gap-2.5">
           <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-amber-400" />
           <span className={`h-2 w-2 shrink-0 rounded-full ${statusStyle}`} />
@@ -421,7 +421,7 @@ function LogDock({ target, onClose }: { target: LogTarget; onClose: () => void }
       </div>
       <pre
         ref={preRef}
-        className={`mx-auto max-w-7xl overflow-auto px-4 pb-3 font-mono text-[11px] leading-relaxed text-emerald-100/70 ${
+        className={`w-full overflow-auto px-6 pb-3 font-mono text-[11px] leading-relaxed text-emerald-100/70 ${
           large ? 'h-[50vh]' : 'h-48'
         }`}
       >
@@ -494,19 +494,12 @@ export default function Console({
   return (
     <LogConsoleContext.Provider value={logApi}>
       <div
-        className="mx-auto w-full max-w-7xl px-6 py-6"
+        className="w-full px-8 py-6"
         style={logTarget ? { paddingBottom: '16rem' } : undefined}
       >
       {cluster !== undefined ? <ClusterBar cluster={cluster} /> : null}
       <div className="flex w-full gap-6">
       <aside className="w-56 shrink-0">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
-        >
-          <ArrowLeft className="h-4 w-4" /> All instances
-        </button>
         <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
           <p className="truncate font-display text-sm font-bold tracking-tight">{name}</p>
           {detail ? (

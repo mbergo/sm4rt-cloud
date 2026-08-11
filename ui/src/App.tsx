@@ -1,5 +1,4 @@
-import { CloudOff } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Show, useAuth } from '@clerk/react';
 import {
   ApiError,
@@ -12,16 +11,16 @@ import {
   type ClusterInfo,
   type Instance,
 } from './lib/api';
-import ClusterBar from './components/ClusterBar';
 import CreateModal from './components/CreateModal';
 import Console from './components/Console';
 import Header from './components/Header';
-import InstanceCard from './components/InstanceCard';
 import Login from './components/Login';
 import TokenLogin from './components/TokenLogin';
 import Admin from './components/Admin';
 import { useConfig } from './lib/config';
-import { PrimaryButton, Toast } from './components/bits';
+import { Toast } from './components/bits';
+
+const LAST_WORKSPACE_KEY = 'sm4rt.lastWorkspace';
 
 interface ToastState {
   message: string;
@@ -102,10 +101,20 @@ function Dashboard({
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const autoSelected = useRef(false);
 
   const notify = useCallback((message: string, tone: ToastState['tone'] = 'ok') => {
     setToast({ message, tone });
     setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const selectWorkspace = useCallback((name: string | null) => {
+    setSelected(name);
+    if (name) {
+      localStorage.setItem(LAST_WORKSPACE_KEY, name);
+    } else {
+      localStorage.removeItem(LAST_WORKSPACE_KEY);
+    }
   }, []);
 
   const refresh = useCallback(() => {
@@ -141,115 +150,97 @@ function Dashboard({
     };
   }, []);
 
-  if (selected) {
-    return (
-      <div className="min-h-screen">
-        <Header
-          instanceCount={instances?.length ?? 0}
-          onCreate={() => setCreateOpen(true)}
-          showUserButton={showUserButton}
-        />
-        <Console
-          name={selected}
-          cluster={cluster}
-          onBack={() => {
-            setSelected(null);
-            refresh();
-          }}
-          notify={notify}
-        />
-        {createOpen ? (
-          <CreateModal
-            onClose={() => setCreateOpen(false)}
-            onCreated={(instance) => {
-              setCreateOpen(false);
-              notify(`Instance ${instance.name} is provisioning`);
-              refresh();
-              setSelected(instance.name);
-            }}
-          />
-        ) : null}
-        {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
-      </div>
-    );
-  }
+  // Auto-select workspace once instances load: last used, else first, else open create modal.
+  useEffect(() => {
+    if (instances === null || autoSelected.current) {
+      return;
+    }
+    autoSelected.current = true;
+    const last = localStorage.getItem(LAST_WORKSPACE_KEY);
+    if (last && instances.some((instance) => instance.name === last)) {
+      setSelected(last);
+    } else if (instances.length > 0) {
+      selectWorkspace(instances[0].name);
+    } else {
+      setCreateOpen(true);
+    }
+  }, [instances, selectWorkspace]);
+
+  // If the selected workspace disappears (deleted elsewhere), fall back to the next one.
+  useEffect(() => {
+    if (instances === null || !selected) {
+      return;
+    }
+    if (!instances.some((instance) => instance.name === selected)) {
+      selectWorkspace(instances.length > 0 ? instances[0].name : null);
+      if (instances.length === 0) {
+        setCreateOpen(true);
+      }
+    }
+  }, [instances, selected, selectWorkspace]);
+
+  const handleDelete = useCallback(
+    (name: string) => {
+      deleteInstance(name)
+        .then(() => {
+          notify(`Deleting ${name}`);
+          if (selected === name) {
+            const rest = (instances ?? []).filter((instance) => instance.name !== name);
+            selectWorkspace(rest.length > 0 ? rest[0].name : null);
+            if (rest.length === 0) {
+              setCreateOpen(true);
+            }
+          }
+          refresh();
+        })
+        .catch(() => notify(`Failed to delete ${name}`, 'err'));
+    },
+    [instances, notify, refresh, selectWorkspace, selected],
+  );
 
   return (
     <div className="min-h-screen">
       <Header
-        instanceCount={instances?.length ?? 0}
+        instances={instances ?? []}
+        selected={selected}
+        onSelect={selectWorkspace}
+        onDelete={handleDelete}
         onCreate={() => setCreateOpen(true)}
         showUserButton={showUserButton}
+      />
+
+      {selected ? (
+        <Console
+          key={selected}
+          name={selected}
+          cluster={cluster}
+          onBack={() => {
+            const rest = (instances ?? []).filter((instance) => instance.name !== selected);
+            selectWorkspace(rest.length > 0 ? rest[0].name : null);
+            if (rest.length === 0) {
+              setCreateOpen(true);
+            }
+            refresh();
+          }}
+          notify={notify}
         />
-
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        <ClusterBar cluster={cluster} />
-
-        <div className="mb-4 flex items-baseline gap-2">
-          <h2 className="font-display text-sm font-bold tracking-tight">Environments</h2>
-          <span className="text-xs text-stone-500">
-            isolated AWS workspaces running on the cluster
-          </span>
-        </div>
-
-        {instances === null ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[0, 1, 2].map((index) => (
-              <div
-                key={index}
-                className="h-44 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]"
-              />
-            ))}
-          </div>
-        ) : instances.length === 0 ? (
-          <div className="animate-rise-in mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-8 py-14 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-              <CloudOff className="h-6 w-6 text-stone-500" />
-            </div>
-            <h2 className="mt-5 font-display text-xl font-bold tracking-tight">
-              No environments yet
-            </h2>
-            <p className="mt-2 text-sm leading-relaxed text-stone-400">
-              Spin up an isolated AWS environment in seconds. Each one gets its own endpoint ready
-              for the AWS CLI, SDKs and Terraform — all running on the cluster above.
-            </p>
-            <PrimaryButton onClick={() => setCreateOpen(true)} className="mt-6">
-              Create your first environment
-            </PrimaryButton>
-          </div>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {instances.map((instance) => (
-              <InstanceCard
-                key={instance.name}
-                instance={instance}
-                onSelect={() => setSelected(instance.name)}
-                onDelete={() => {
-                  deleteInstance(instance.name)
-                    .then(() => {
-                      notify(`Deleting ${instance.name}`);
-                      refresh();
-                    })
-                    .catch(() => notify(`Failed to delete ${instance.name}`, 'err'));
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </main>
+      ) : instances === null ? (
+        <main className="w-full px-8 py-8">
+          <div className="h-40 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]" />
+        </main>
+      ) : null}
 
       {createOpen ? (
         <CreateModal
           onClose={() => setCreateOpen(false)}
           onCreated={(instance) => {
             setCreateOpen(false);
-            notify(`Instance ${instance.name} is provisioning`);
+            notify(`Workspace ${instance.name} is provisioning`);
             refresh();
-            setSelected(instance.name);
+            selectWorkspace(instance.name);
           }}
         />
       ) : null}
-
 
       {toast ? <Toast message={toast.message} tone={toast.tone} /> : null}
     </div>
