@@ -137,6 +137,7 @@ import {
   ObservabilityPage,
   RegistryPage,
   ServersPage,
+  TableStorePage,
 } from './Compute';
 import { computeSummary } from '../lib/compute';
 import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
@@ -158,7 +159,8 @@ type SectionId =
   | 'observability'
   | 'devops'
   | 'marketplace'
-  | 'objectstore';
+  | 'objectstore'
+  | 'tablestore';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -166,6 +168,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'data-eng', label: 'Data Engineering', icon: Landmark },
   { id: 's3', label: 'Buckets', icon: Archive, group: 'Storage & data' },
   { id: 'objectstore', label: 'Object store (S3)', icon: Archive, group: 'Storage & data' },
+  { id: 'tablestore', label: 'Table store (DDB)', icon: Database, group: 'Storage & data' },
   { id: 'dynamodb', label: 'Tables', icon: Database, group: 'Storage & data' },
   { id: 'rds', label: 'Databases (RDS)', icon: Cylinder, group: 'Storage & data' },
   { id: 'elasticache', label: 'Cache clusters', icon: MemoryStick, group: 'Storage & data' },
@@ -613,6 +616,8 @@ export default function Console({
           <MarketplacePage instance={name} notify={notify} />
         ) : section === 'objectstore' ? (
           <ObjectStorePage instance={name} notify={notify} />
+        ) : section === 'tablestore' ? (
+          <TableStorePage instance={name} notify={notify} />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (

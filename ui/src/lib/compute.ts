@@ -404,3 +404,42 @@ export const deleteBucket = (ws: string, name: string) =>
   request<void>(`${base(ws)}/objectstore/buckets/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
+
+// — Table Store (ScyllaDB Alternator, real DynamoDB protocol) —
+
+export interface TableStoreStatus {
+  enabled: boolean;
+  state: string;
+  host: string | null;
+  url: string | null;
+  accessKey: string | null;
+  secretKey: string | null;
+}
+
+export interface TableInfo {
+  name: string;
+  status: string | null;
+  keySchema: Array<{ attribute: string; type: string; role: string }>;
+  itemCount: number | null;
+}
+
+export const getTableStore = (ws: string) =>
+  request<TableStoreStatus>(`${base(ws)}/tablestore`);
+export const enableTableStore = (ws: string) =>
+  request<TableStoreStatus>(`${base(ws)}/tablestore`, { method: 'POST', body: '{}' });
+export const disableTableStore = (ws: string) =>
+  request<void>(`${base(ws)}/tablestore`, { method: 'DELETE' });
+export const listTables = (ws: string) =>
+  request<{ tables: TableInfo[] }>(`${base(ws)}/tablestore/tables`);
+export const createTable = (
+  ws: string,
+  input: { name: string; hashKey: string; hashType: string; rangeKey?: string; rangeType?: string },
+) =>
+  request<{ ok: boolean }>(`${base(ws)}/tablestore/tables`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+export const deleteTable = (ws: string, name: string) =>
+  request<void>(`${base(ws)}/tablestore/tables/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });

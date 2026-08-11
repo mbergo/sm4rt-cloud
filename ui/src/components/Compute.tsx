@@ -44,6 +44,7 @@ import {
   addGitopsApp,
   createBucket,
   createCache,
+  createTable,
   createCdn,
   createDatabase,
   createDns,
@@ -53,6 +54,7 @@ import {
   databaseLogs,
   deleteBucket,
   deleteCache,
+  deleteTable,
   deleteCdn,
   deleteDatabase,
   deleteDns,
@@ -61,14 +63,17 @@ import {
   disableDevops,
   disableObjectStore,
   disableObservability,
+  disableTableStore,
   disableRegistry,
   enableDevops,
   enableObjectStore,
   enableObservability,
+  enableTableStore,
   enableRegistry,
   getDevops,
   getObjectStore,
   getObservability,
+  getTableStore,
   getRegistry,
   listCaches,
   listBuckets,
@@ -78,6 +83,7 @@ import {
   listGateways,
   listGitopsApps,
   listRegistryRepos,
+  listTables,
   listTasks,
   listVms,
   purgeCdn,
@@ -107,6 +113,8 @@ import {
   type RegistryRepo,
   type RegistryStatus,
   type ServicePlanId,
+  type TableInfo,
+  type TableStoreStatus,
   type TaskInfo,
   type VmImageId,
   type VmInfo,
@@ -2487,6 +2495,232 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
                               () => deleteBucket(instance, bucket.name),
                               `Bucket ${bucket.name} deleted`,
                             )
+                          }
+                          disabled={busy}
+                          className="text-stone-500 transition hover:text-rose-300 disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      )}
+    </PageShell>
+  );
+}
+
+export function TableStorePage({ instance, notify }: PageProps) {
+  const { data, error, swarmOnly, loading, refresh } = useComputeData(
+    useCallback(() => getTableStore(instance), [instance]),
+  );
+  const tables = useComputeData(
+    useCallback(async () => {
+      const status = await getTableStore(instance);
+      if (!status.enabled || status.state !== 'running') return { tables: [] as TableInfo[] };
+      return listTables(instance);
+    }, [instance]),
+    15000,
+  );
+  const [busy, setBusy] = useState(false);
+  const [newTable, setNewTable] = useState('');
+  const [hashKey, setHashKey] = useState('id');
+  const logs = useLogConsole();
+
+  const status: TableStoreStatus | null = data;
+  const tableList: TableInfo[] = tables.data?.tables ?? [];
+
+  const run = async (fn: () => Promise<unknown>, okMsg: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      notify(okMsg);
+      refresh(true);
+      tables.refresh(true);
+    } catch (err) {
+      notify(errMsg(err), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (swarmOnly)
+    return (
+      <PageShell icon={Database} title="Table store" subtitle="DynamoDB-compatible tables (ScyllaDB)">
+        <SwarmOnlyNote />
+      </PageShell>
+    );
+
+  const endpoint = status?.url ?? '';
+
+  return (
+    <PageShell
+      icon={Database}
+      title="Table store"
+      subtitle="Real DynamoDB wire protocol served by ScyllaDB Alternator"
+      onRefresh={() => {
+        refresh();
+        tables.refresh();
+      }}
+      actions={
+        status?.enabled ? (
+          <GhostButton
+            onClick={() =>
+              logs.open({
+                instance,
+                service: `sm4rt-ddb-${instance}`,
+                label: 'Table store',
+              })
+            }
+          >
+            <ScrollText className="h-3.5 w-3.5" /> Logs
+          </GhostButton>
+        ) : null
+      }
+    >
+      {error && !swarmOnly ? <ErrorNote message={error} /> : null}
+      {loading && !status ? (
+        <Card><EmptyState text="Loading…" /></Card>
+      ) : !status?.enabled ? (
+        <Card className="p-8 text-center">
+          <Database className="mx-auto h-10 w-10 text-amber-300/60" />
+          <p className="mt-3 font-display text-base font-semibold text-stone-100">
+            Real DynamoDB tables, one click.
+          </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-stone-500">
+            A dedicated ScyllaDB node speaking the genuine DynamoDB protocol (Alternator) — point
+            any AWS SDK or the CLI at your workspace endpoint and go.
+          </p>
+          <PrimaryButton
+            onClick={() =>
+              run(() => enableTableStore(instance), 'Table store deploying — ready in ~60s')
+            }
+            disabled={busy}
+            className="mt-4"
+          >
+            {busy ? 'Deploying…' : 'Enable table store'}
+          </PrimaryButton>
+        </Card>
+      ) : (
+        <>
+          <Card className="space-y-3 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <StateDot state={status.state} />
+              <DangerButton
+                onClick={() => run(() => disableTableStore(instance), 'Table store removed')}
+                disabled={busy}
+                confirmLabel="Confirm disable"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Disable
+              </DangerButton>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {status.url ? <CopyRow label="DynamoDB endpoint" value={status.url} /> : null}
+              {status.accessKey ? <CopyRow label="Access key" value={status.accessKey} /> : null}
+              {status.secretKey ? <CopyRow label="Secret key" value={status.secretKey} secret /> : null}
+            </div>
+          </Card>
+
+          {endpoint && status.accessKey && status.secretKey ? (
+            <Card className="space-y-3 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+                Use with the AWS CLI
+              </p>
+              <div className="grid gap-2">
+                <Snippet
+                  title="1 — Credentials"
+                  code={`export AWS_ACCESS_KEY_ID=${status.accessKey}\nexport AWS_SECRET_ACCESS_KEY='${status.secretKey}'`}
+                />
+                <Snippet
+                  title="2 — List tables"
+                  code={`aws --endpoint-url ${endpoint} dynamodb list-tables`}
+                />
+                <Snippet
+                  title="3 — Put an item"
+                  code={`aws --endpoint-url ${endpoint} dynamodb put-item --table-name my-table --item '{"id":{"S":"1"}}'`}
+                />
+              </div>
+            </Card>
+          ) : null}
+
+          <Card>
+            <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+                Tables
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  value={newTable}
+                  onChange={(e) => setNewTable(e.target.value)}
+                  placeholder="table-name"
+                  className="w-36 rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
+                />
+                <input
+                  value={hashKey}
+                  onChange={(e) => setHashKey(e.target.value)}
+                  placeholder="partition key"
+                  className="w-28 rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
+                />
+                <GhostButton
+                  onClick={() =>
+                    run(async () => {
+                      await createTable(instance, {
+                        name: newTable.trim(),
+                        hashKey: hashKey.trim() || 'id',
+                        hashType: 'S',
+                      });
+                      setNewTable('');
+                    }, `Table ${newTable.trim()} created`)
+                  }
+                  disabled={busy || !newTable.trim()}
+                  className="!px-2 !py-0.5 !text-xs"
+                >
+                  <Plus className="h-3 w-3" /> Create
+                </GhostButton>
+                <GhostButton onClick={() => tables.refresh()} className="!px-2 !py-0.5 !text-xs">
+                  <RefreshCw className="h-3 w-3" />
+                </GhostButton>
+              </div>
+            </div>
+            {tableList.length === 0 ? (
+              <EmptyState text="No tables yet — create one above or via the AWS CLI." />
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <Th>Table</Th>
+                    <Th>Key schema</Th>
+                    <Th>Status</Th>
+                    <Th> </Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {tableList.map((table) => (
+                    <tr key={table.name}>
+                      <Td><Mono className="text-stone-200">{table.name}</Mono></Td>
+                      <Td>
+                        <div className="flex flex-wrap gap-1.5">
+                          {table.keySchema.map((k) => (
+                            <span
+                              key={k.attribute}
+                              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[11px] text-stone-300"
+                            >
+                              {k.attribute} · {k.type} · {k.role}
+                            </span>
+                          ))}
+                        </div>
+                      </Td>
+                      <Td className="text-xs text-stone-500">{table.status ?? '—'}</Td>
+                      <Td className="text-right">
+                        <button
+                          type="button"
+                          title={`Delete ${table.name}`}
+                          onClick={() =>
+                            run(() => deleteTable(instance, table.name), `Table ${table.name} deleted`)
                           }
                           disabled={busy}
                           className="text-stone-500 transition hover:text-rose-300 disabled:opacity-40"

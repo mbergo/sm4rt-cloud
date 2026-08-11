@@ -6,6 +6,7 @@ import { ComputeError, type ComputeManager } from './compute.ts';
 import type { DevopsManager } from './devops.ts';
 import type { RegistryManager } from './registry.ts';
 import type { ObjectStoreManager } from './objectstore.ts';
+import type { TableStoreManager } from './tablestore.ts';
 import type { GatewayRoute } from './compute-templates.ts';
 
 export interface ComputeRouteDeps {
@@ -13,6 +14,7 @@ export interface ComputeRouteDeps {
   devops: DevopsManager;
   registry: RegistryManager;
   objectstore: ObjectStoreManager;
+  tablestore: TableStoreManager;
   /** resolves the workspace or null when it does not exist */
   requireInstance: (name: string) => Promise<unknown | null>;
   /** compute is swarm-only; other drivers get an honest 501 */
@@ -35,7 +37,7 @@ function tailFrom(req: Req): number {
 }
 
 export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDeps): void {
-  const { compute, devops, registry, objectstore } = deps;
+  const { compute, devops, registry, objectstore, tablestore } = deps;
   const base = '/api/instances/:name/compute';
 
   /** shared preamble: 501 off-swarm, 404 unknown workspace, then run + map errors */
@@ -409,6 +411,51 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     route(async (ws, req, reply) => {
       const { bucket } = req.params as { bucket: string };
       await objectstore.deleteBucket(ws, bucket);
+      return reply.code(204).send();
+    }),
+  );
+
+  // — Table Store: real ScyllaDB Alternator per workspace (DynamoDB protocol) —
+  app.get(`${base}/tablestore`, route(async (ws) => tablestore.status(ws)));
+  app.post(
+    `${base}/tablestore`,
+    route(async (ws, _req, reply) => reply.code(201).send(await tablestore.enable(ws))),
+  );
+  app.delete(
+    `${base}/tablestore`,
+    route(async (ws, _req, reply) => {
+      await tablestore.disable(ws);
+      return reply.code(204).send();
+    }),
+  );
+  app.get(
+    `${base}/tablestore/tables`,
+    route(async (ws) => ({ tables: await tablestore.listTables(ws) })),
+  );
+  app.post(
+    `${base}/tablestore/tables`,
+    route(async (ws, req, reply) => {
+      const body = (req.body ?? {}) as {
+        name?: string;
+        hashKey?: string;
+        hashType?: 'S' | 'N' | 'B';
+        rangeKey?: string;
+        rangeType?: 'S' | 'N' | 'B';
+      };
+      await tablestore.createTable(ws, {
+        name: body.name ?? '',
+        hashKey: body.hashKey ?? 'id',
+        hashType: body.hashType ?? 'S',
+        ...(body.rangeKey ? { rangeKey: body.rangeKey, rangeType: body.rangeType ?? 'S' } : {}),
+      });
+      return reply.code(201).send({ ok: true });
+    }),
+  );
+  app.delete(
+    `${base}/tablestore/tables/:table`,
+    route(async (ws, req, reply) => {
+      const { table } = req.params as { table: string };
+      await tablestore.deleteTable(ws, table);
       return reply.code(204).send();
     }),
   );
