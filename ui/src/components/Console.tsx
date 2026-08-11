@@ -133,6 +133,7 @@ import {
   DevopsPage,
   DnsPage,
   GatewaysPage,
+  ObjectStorePage,
   ObservabilityPage,
   RegistryPage,
   ServersPage,
@@ -156,13 +157,15 @@ type SectionId =
   | 'domains'
   | 'observability'
   | 'devops'
-  | 'marketplace';
+  | 'marketplace'
+  | 'objectstore';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'services', label: 'Service catalog', icon: Boxes },
   { id: 'data-eng', label: 'Data Engineering', icon: Landmark },
   { id: 's3', label: 'Buckets', icon: Archive, group: 'Storage & data' },
+  { id: 'objectstore', label: 'Object store (S3)', icon: Archive, group: 'Storage & data' },
   { id: 'dynamodb', label: 'Tables', icon: Database, group: 'Storage & data' },
   { id: 'rds', label: 'Databases (RDS)', icon: Cylinder, group: 'Storage & data' },
   { id: 'elasticache', label: 'Cache clusters', icon: MemoryStick, group: 'Storage & data' },
@@ -608,6 +611,8 @@ export default function Console({
           <DevopsPage instance={name} notify={notify} />
         ) : section === 'marketplace' ? (
           <MarketplacePage instance={name} notify={notify} />
+        ) : section === 'objectstore' ? (
+          <ObjectStorePage instance={name} notify={notify} />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (

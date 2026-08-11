@@ -16,6 +16,7 @@ import { emit, subscribe } from './events.ts';
 import { ComputeManager } from './compute.ts';
 import { DevopsManager } from './devops.ts';
 import { RegistryManager } from './registry.ts';
+import { ObjectStoreManager } from './objectstore.ts';
 import { registerComputeRoutes } from './compute-routes.ts';
 import { Store } from './db.ts';
 import { registerDomainRoutes } from './domains.ts';
@@ -105,6 +106,7 @@ const compute = new ComputeManager({
 });
 const devops = new DevopsManager(compute);
 const registry = new RegistryManager(compute);
+const objectstore = new ObjectStoreManager(compute);
 if (computeEnabled) {
   devops.startReconciler(async () => (await provisioner.list()).map((i) => i.name));
 }
@@ -587,6 +589,7 @@ registerComputeRoutes(app, {
   compute,
   devops,
   registry,
+  objectstore,
   requireInstance: requireRunningInstance,
   enabled: computeEnabled,
 });

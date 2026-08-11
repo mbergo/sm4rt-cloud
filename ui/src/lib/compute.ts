@@ -370,3 +370,37 @@ export const deleteRegistryTag = (ws: string, repo: string, tag: string) =>
   request<void>(`${base(ws)}/registry/repos/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tag)}`, {
     method: 'DELETE',
   });
+
+// — Object Store (MinIO, real S3 API) —
+
+export interface ObjectStoreStatus {
+  enabled: boolean;
+  state: string;
+  host: string | null;
+  url: string | null;
+  accessKey: string | null;
+  secretKey: string | null;
+}
+
+export interface BucketInfo {
+  name: string;
+  createdAt: string | null;
+}
+
+export const getObjectStore = (ws: string) =>
+  request<ObjectStoreStatus>(`${base(ws)}/objectstore`);
+export const enableObjectStore = (ws: string) =>
+  request<ObjectStoreStatus>(`${base(ws)}/objectstore`, { method: 'POST', body: '{}' });
+export const disableObjectStore = (ws: string) =>
+  request<void>(`${base(ws)}/objectstore`, { method: 'DELETE' });
+export const listBuckets = (ws: string) =>
+  request<{ buckets: BucketInfo[] }>(`${base(ws)}/objectstore/buckets`);
+export const createBucket = (ws: string, name: string) =>
+  request<{ ok: boolean }>(`${base(ws)}/objectstore/buckets`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+export const deleteBucket = (ws: string, name: string) =>
+  request<void>(`${base(ws)}/objectstore/buckets/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });

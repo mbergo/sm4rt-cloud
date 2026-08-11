@@ -5,12 +5,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ComputeError, type ComputeManager } from './compute.ts';
 import type { DevopsManager } from './devops.ts';
 import type { RegistryManager } from './registry.ts';
+import type { ObjectStoreManager } from './objectstore.ts';
 import type { GatewayRoute } from './compute-templates.ts';
 
 export interface ComputeRouteDeps {
   compute: ComputeManager;
   devops: DevopsManager;
   registry: RegistryManager;
+  objectstore: ObjectStoreManager;
   /** resolves the workspace or null when it does not exist */
   requireInstance: (name: string) => Promise<unknown | null>;
   /** compute is swarm-only; other drivers get an honest 501 */
@@ -33,7 +35,7 @@ function tailFrom(req: Req): number {
 }
 
 export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDeps): void {
-  const { compute, devops, registry } = deps;
+  const { compute, devops, registry, objectstore } = deps;
   const base = '/api/instances/:name/compute';
 
   /** shared preamble: 501 off-swarm, 404 unknown workspace, then run + map errors */
@@ -373,6 +375,40 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     route(async (ws, req, reply) => {
       const { repo, tag } = req.params as { repo: string; tag: string };
       await registry.deleteTag(ws, decodeURIComponent(repo), tag);
+      return reply.code(204).send();
+    }),
+  );
+
+  // — Object Store: real MinIO per workspace (aws s3 / SDKs, path-style) —
+  app.get(`${base}/objectstore`, route(async (ws) => objectstore.status(ws)));
+  app.post(
+    `${base}/objectstore`,
+    route(async (ws, _req, reply) => reply.code(201).send(await objectstore.enable(ws))),
+  );
+  app.delete(
+    `${base}/objectstore`,
+    route(async (ws, _req, reply) => {
+      await objectstore.disable(ws);
+      return reply.code(204).send();
+    }),
+  );
+  app.get(
+    `${base}/objectstore/buckets`,
+    route(async (ws) => ({ buckets: await objectstore.listBuckets(ws) })),
+  );
+  app.post(
+    `${base}/objectstore/buckets`,
+    route(async (ws, req, reply) => {
+      const { name } = (req.body ?? {}) as { name?: string };
+      await objectstore.createBucket(ws, name ?? '');
+      return reply.code(201).send({ ok: true });
+    }),
+  );
+  app.delete(
+    `${base}/objectstore/buckets/:bucket`,
+    route(async (ws, req, reply) => {
+      const { bucket } = req.params as { bucket: string };
+      await objectstore.deleteBucket(ws, bucket);
       return reply.code(204).send();
     }),
   );
