@@ -179,7 +179,7 @@ function AdminDashboard({
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-white/5 bg-stone-950/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center gap-4 px-6 py-4">
+        <div className="flex w-full items-center gap-4 px-6 py-4">
           <BrandMark />
           <div className="min-w-0">
             <h1 className="font-display text-lg font-bold leading-tight tracking-tight">
@@ -200,7 +200,7 @@ function AdminDashboard({
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-8 px-6 py-8">
+      <main className="w-full space-y-8 px-8 py-8">
         {overview ? (
           <>
             <section>
