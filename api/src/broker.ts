@@ -226,6 +226,8 @@ export class BrokerManager {
         [SM4RT_KIND_LABEL]: 'broker',
         [SM4RT_WS_LABEL]: ws,
         [SM4RT_NAME_LABEL]: 'mq',
+        // self-register with the workspace observability stack at birth
+        'sm4rt.metrics': JSON.stringify({ port: 15692, path: '/metrics' }),
         ...this.compute.caddyLabelsFor(host, 15672),
       },
       TaskTemplate: {

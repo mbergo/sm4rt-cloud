@@ -33,6 +33,9 @@ export class MarketplaceError extends Error {
 
 const PROJECT_PREFIX = 'ws-';
 const TEMPLATE_CACHE_MS = 60 * 60 * 1000;
+// When set, marketplace apps are re-domained to <sub>.<APPS_DOMAIN> right
+// after creation (a wildcard DNS record must point at the Coolify server).
+const APPS_DOMAIN = (process.env.COOLIFY_APPS_DOMAIN ?? '').trim();
 
 export function projectNameFor(workspace: string): string {
   return `${PROJECT_PREFIX}${workspace}`;
@@ -232,7 +235,41 @@ export class MarketplaceManager {
       throw new MarketplaceError(status >= 400 && status < 500 ? status : 502,
         body.message ?? 'coolify rejected the service');
     }
-    return { uuid: body.uuid, domains: body.domains ?? [] };
+    let domains = body.domains ?? [];
+    if (APPS_DOMAIN && domains.length > 0) {
+      domains = await this.redomain(body.uuid, domains);
+    }
+    return { uuid: body.uuid, domains };
+  }
+
+  /** Rewrite generated fqdns onto our platform domain (best effort). */
+  private async redomain(serviceUuid: string, original: string[]): Promise<string[]> {
+    try {
+      const detail = await this.api('GET', `/services/${serviceUuid}`);
+      const apps = ((detail.json ?? {}) as { applications?: Array<Record<string, unknown>> })
+        .applications;
+      if (!Array.isArray(apps)) return original;
+      const out: string[] = [];
+      for (const a of apps) {
+        const uuid = String(a.uuid ?? '');
+        const fqdn = typeof a.fqdn === 'string' ? a.fqdn : '';
+        if (!uuid || !fqdn) continue;
+        const rewritten = fqdn
+          .split(',')
+          .map((d) => {
+            const m = /^(https?:\/\/)([^/:,]+)(:\d+)?$/.exec(d.trim());
+            if (!m) return d.trim();
+            const sub = m[2].split('.')[0];
+            return `${m[1]}${sub}.${APPS_DOMAIN}${m[3] ?? ''}`;
+          })
+          .join(',');
+        const res = await this.api('PATCH', `/applications/${uuid}`, { fqdn: rewritten });
+        out.push(...(res.status < 300 ? rewritten : fqdn).split(',').map((s) => s.trim()));
+      }
+      return out.length > 0 ? out : original;
+    } catch {
+      return original;
+    }
   }
 
   /** Ownership check: the service must live in this workspace's project. */

@@ -1528,7 +1528,7 @@ export class ComputeManager {
 
   private async currentScrapeTargets(ws: string): Promise<ScrapeTarget[]> {
     const tasks = await this.listTasks(ws);
-    return tasks
+    const fromTasks = tasks
       .filter((t) => t.metricsPort)
       .map((t) => ({
         taskName: t.name,
@@ -1536,6 +1536,28 @@ export class ComputeManager {
         port: t.metricsPort!,
         path: t.metricsPath || '/metrics',
       }));
+    // Managed services self-register at birth via a sm4rt.metrics label
+    // ('{"port":9180,"path":"/metrics"}') — service discovery for free.
+    const svcs = await this.listByLabels([`${SM4RT_WS_LABEL}=${ws}`]);
+    const fromLabels: ScrapeTarget[] = [];
+    for (const s of svcs) {
+      const raw = s.Spec.Labels?.['sm4rt.metrics'];
+      if (!raw) continue;
+      try {
+        const m = JSON.parse(raw) as { port?: number; path?: string };
+        if (m.port) {
+          fromLabels.push({
+            taskName: s.Spec.Labels?.[SM4RT_NAME_LABEL] ?? s.Spec.Name,
+            serviceHost: s.Spec.Name,
+            port: m.port,
+            path: m.path || '/metrics',
+          });
+        }
+      } catch {
+        // malformed label — skip
+      }
+    }
+    return [...fromTasks, ...fromLabels];
   }
 
   async enableObservability(ws: string): Promise<ObsInfo> {

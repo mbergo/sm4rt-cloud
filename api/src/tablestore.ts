@@ -273,6 +273,8 @@ export class TableStoreManager {
         [SM4RT_KIND_LABEL]: 'tablestore',
         [SM4RT_WS_LABEL]: ws,
         [SM4RT_NAME_LABEL]: 'ddb',
+        // self-register with the workspace observability stack at birth
+        'sm4rt.metrics': JSON.stringify({ port: 9180, path: '/metrics' }),
         ...this.compute.caddyLabelsFor(host, 8000),
       },
       TaskTemplate: {

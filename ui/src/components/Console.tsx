@@ -101,6 +101,7 @@ import {
   listExplorerServices,
   listResources,
   listServices,
+  listServiceTargets,
   openLogStream,
   putServiceEnv,
   startOtelAgent,
@@ -108,6 +109,7 @@ import {
   stopService,
   type AgentRun,
   type ClusterInfo,
+  type ServiceTargetInfo,
   type InstanceDetail,
   type InstanceMetrics,
   type RealServiceId,
@@ -141,7 +143,7 @@ import {
   ServersPage,
   TableStorePage,
 } from './Compute';
-import { computeSummary, computeDiscovery, type DiscoveredService } from '../lib/compute';
+import { computeSummary, computeDiscovery, getObservability, type DiscoveredService, type ObsInfo } from '../lib/compute';
 import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
@@ -648,6 +650,191 @@ export default function Console({
   );
 }
 
+/**
+ * InlineLogTerminal — always-on streaming log pane (SSE) embedded in a page.
+ * Picks the first running target by default; the select switches services.
+ */
+function InlineLogTerminal({ instance }: { instance: string }) {
+  const [targets, setTargets] = useState<ServiceTargetInfo[]>([]);
+  const [target, setTarget] = useState<string>('');
+  const [lines, setLines] = useState<string[]>([]);
+  const [status, setStatus] = useState<'connecting' | 'live' | 'error'>('connecting');
+  const preRef = useRef<HTMLPreElement | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    listServiceTargets(instance)
+      .then((data) => {
+        if (!alive) return;
+        setTargets(data.targets);
+        setTarget((prev) => prev || data.targets[0]?.name || '');
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [instance]);
+
+  useEffect(() => {
+    if (!target) return;
+    let source: EventSource | null = null;
+    let alive = true;
+    setLines([]);
+    setStatus('connecting');
+    openLogStream(instance, target, 80)
+      .then((es) => {
+        if (!alive) {
+          es.close();
+          return;
+        }
+        source = es;
+        es.onmessage = (ev) => {
+          setStatus('live');
+          setLines((prev) => [...prev.slice(-499), ev.data as string]);
+        };
+        es.onerror = () => setStatus('error');
+      })
+      .catch(() => setStatus('error'));
+    return () => {
+      alive = false;
+      source?.close();
+    };
+  }, [instance, target]);
+
+  useEffect(() => {
+    const pre = preRef.current;
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }, [lines]);
+
+  if (targets.length === 0) return null;
+
+  return (
+    <section>
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
+          <TerminalSquare className="h-3.5 w-3.5 text-amber-400" /> Live logs
+          <span
+            className={`h-2 w-2 rounded-full ${
+              status === 'live'
+                ? 'bg-emerald-400'
+                : status === 'connecting'
+                  ? 'bg-amber-400 animate-pulse'
+                  : 'bg-rose-400'
+            }`}
+          />
+        </h3>
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          className="rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-[11px] text-stone-300 outline-none focus:border-amber-400/50"
+        >
+          {targets.map((t) => (
+            <option key={t.name} value={t.name}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <pre
+        ref={preRef}
+        className="mt-2 h-56 w-full overflow-auto rounded-xl border border-white/10 bg-black/50 p-3 font-mono text-[11px] leading-relaxed text-emerald-100/70"
+      >
+        {lines.length > 0
+          ? lines.join('\n')
+          : status === 'error'
+            ? 'stream unavailable'
+            : 'waiting for log output…'}
+      </pre>
+    </section>
+  );
+}
+
+/** Grafana-style line chart: grid, gradient area fill, amber/blue strokes. */
+function LineChart({
+  title,
+  values,
+  unit,
+  stroke,
+  height = 180,
+  format,
+}: {
+  title: string;
+  values: number[];
+  unit?: string;
+  stroke: string;
+  height?: number;
+  format: (v: number) => string;
+}) {
+  const w = 600;
+  const h = height;
+  const pad = { t: 10, r: 8, b: 18, l: 46 };
+  const iw = w - pad.l - pad.r;
+  const ih = h - pad.t - pad.b;
+  const max = Math.max(...values, 1) * 1.15;
+  const pts = values.length > 1 ? values : [...values, ...values];
+  const step = iw / Math.max(pts.length - 1, 1);
+  const x = (i: number) => pad.l + i * step;
+  const y = (v: number) => pad.t + ih - (v / max) * ih;
+  const line = pts.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(pts.length - 1).toFixed(1)},${(pad.t + ih).toFixed(1)} L${pad.l},${(pad.t + ih).toFixed(1)} Z`;
+  const gridRows = [0.25, 0.5, 0.75];
+  const gid = `g-${title.replace(/\W/g, '')}`;
+  const last = values[values.length - 1] ?? 0;
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="flex items-baseline justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-stone-500">{title}</p>
+        <p className="font-mono text-sm text-stone-100">
+          {format(last)}
+          {unit ? <span className="ml-1 text-[10px] text-stone-500">{unit}</span> : null}
+        </p>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 w-full" preserveAspectRatio="none" role="img" aria-label={title}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {gridRows.map((r) => (
+          <g key={r}>
+            <line
+              x1={pad.l}
+              x2={w - pad.r}
+              y1={pad.t + ih * r}
+              y2={pad.t + ih * r}
+              stroke="rgba(255,255,255,0.06)"
+              strokeWidth="1"
+            />
+            <text
+              x={pad.l - 6}
+              y={pad.t + ih * r + 3}
+              textAnchor="end"
+              fontSize="9"
+              fill="rgba(168,162,158,0.6)"
+              fontFamily="monospace"
+            >
+              {format(max * (1 - r))}
+            </text>
+          </g>
+        ))}
+        <line x1={pad.l} x2={w - pad.r} y1={pad.t + ih} y2={pad.t + ih} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+        {values.length > 0 ? (
+          <>
+            <path d={area} fill={`url(#${gid})`} />
+            <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            <circle cx={x(pts.length - 1)} cy={y(pts[pts.length - 1])} r="3" fill={stroke} />
+          </>
+        ) : (
+          <text x={w / 2} y={h / 2} textAnchor="middle" fontSize="11" fill="rgba(168,162,158,0.5)">
+            collecting…
+          </text>
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function Overview({
   detail,
   notify,
@@ -666,6 +853,10 @@ function Overview({
   const [services, setServices] = useState<RealServiceInfo[] | null>(null);
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [memHistory, setMemHistory] = useState<number[]>([]);
+  const [svcMetrics, setSvcMetrics] = useState<
+    Array<{ service: string; cpuMilli: number; memoryBytes: number }>
+  >([]);
+  const [obs, setObs] = useState<ObsInfo | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -682,6 +873,14 @@ function Overview({
           const mem = data.services.reduce((sum, svc) => sum + svc.memoryBytes, 0);
           setCpuHistory((prev) => [...prev.slice(-(METRIC_HISTORY_LIMIT - 1)), cpu]);
           setMemHistory((prev) => [...prev.slice(-(METRIC_HISTORY_LIMIT - 1)), mem]);
+          setSvcMetrics(
+            [...data.services].sort((a, b) => b.cpuMilli - a.cpuMilli || b.memoryBytes - a.memoryBytes),
+          );
+        })
+        .catch(() => undefined);
+      getObservability(detail.name)
+        .then((data) => {
+          if (alive) setObs(data.observability);
         })
         .catch(() => undefined);
     };
@@ -968,6 +1167,83 @@ function Overview({
             </div>
           ))}
       </section>
+
+      <section>
+        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
+          <Gauge className="h-3.5 w-3.5 text-amber-400" /> Monitoring
+          {obs?.grafanaUrl ? (
+            <a
+              href={obs.grafanaUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] normal-case tracking-normal text-amber-300 transition hover:bg-white/10"
+            >
+              <ExternalLink className="h-3 w-3" /> Open Grafana
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onNavigate('observability')}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] normal-case tracking-normal text-stone-400 transition hover:bg-white/10 hover:text-amber-200"
+            >
+              Enable full observability (Grafana + OTel)
+            </button>
+          )}
+        </h3>
+        <div className="mt-2 grid gap-4 lg:grid-cols-2">
+          <LineChart
+            title="CPU — all services"
+            values={cpuHistory}
+            stroke="#fbbf24"
+            format={(v) => formatCpu(v)}
+          />
+          <LineChart
+            title="Memory — all services"
+            values={memHistory}
+            stroke="#38bdf8"
+            format={(v) => formatMemory(v)}
+          />
+        </div>
+        {svcMetrics.length > 0 ? (
+          <div className="mt-4 overflow-hidden rounded-2xl border border-white/10">
+            <table className="w-full text-sm">
+              <thead className="bg-white/[0.04] text-left text-[10px] uppercase tracking-wider text-stone-500">
+                <tr>
+                  <th className="px-4 py-2">Service</th>
+                  <th className="px-4 py-2">CPU</th>
+                  <th className="px-4 py-2 w-1/3"> </th>
+                  <th className="px-4 py-2">Memory</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {svcMetrics.slice(0, 10).map((m) => {
+                  const maxCpu = Math.max(...svcMetrics.map((x) => x.cpuMilli), 1);
+                  const pct = Math.max(2, Math.round((m.cpuMilli / maxCpu) * 100));
+                  return (
+                    <tr key={m.service} className="bg-white/[0.02]">
+                      <td className="px-4 py-2 font-mono text-xs text-stone-200">{m.service}</td>
+                      <td className="px-4 py-2 font-mono text-xs tabular-nums">{formatCpu(m.cpuMilli)}</td>
+                      <td className="px-4 py-2">
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/5">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs tabular-nums">
+                        {formatMemory(m.memoryBytes)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
+      <InlineLogTerminal instance={detail.name} />
 
       <section className="rounded-xl border border-rose-500/20 bg-rose-500/[0.04] px-4 py-3">
         <div className="flex items-center justify-between gap-3">
@@ -2551,6 +2827,8 @@ function RealServiceView({
                 label={`${info.label} / ${selectedInst.name ?? 'default'}`}
               />
             ) : null}
+
+            {selectedInst ? <InlineLogTerminal instance={instance} /> : null}
           </>
         );
       })()}
