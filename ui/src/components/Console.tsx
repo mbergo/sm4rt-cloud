@@ -129,6 +129,7 @@ import {
   CachesPage,
   CdnPage,
   ContainersPage,
+  BrokerPage,
   DatabasesPage,
   DevopsPage,
   DnsPage,
@@ -160,7 +161,8 @@ type SectionId =
   | 'devops'
   | 'marketplace'
   | 'objectstore'
-  | 'tablestore';
+  | 'tablestore'
+  | 'broker';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -175,6 +177,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'secrets', label: 'Secrets', icon: KeyRound, group: 'Storage & data' },
   { id: 'ssm', label: 'Parameters', icon: SlidersHorizontal, group: 'Storage & data' },
   { id: 'sqs', label: 'Queues', icon: ListTree, group: 'Messaging' },
+  { id: 'broker', label: 'Broker (AMQP)', icon: ListTree, group: 'Messaging' },
   { id: 'sns', label: 'Topics', icon: Bell, group: 'Messaging' },
   { id: 'events', label: 'Event rules', icon: CalendarClock, group: 'Messaging' },
   { id: 'kinesis', label: 'Streams', icon: AudioWaveform, group: 'Messaging' },
@@ -618,6 +621,8 @@ export default function Console({
           <ObjectStorePage instance={name} notify={notify} />
         ) : section === 'tablestore' ? (
           <TableStorePage instance={name} notify={notify} />
+        ) : section === 'broker' ? (
+          <BrokerPage instance={name} notify={notify} />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (

@@ -7,6 +7,7 @@ import type { DevopsManager } from './devops.ts';
 import type { RegistryManager } from './registry.ts';
 import type { ObjectStoreManager } from './objectstore.ts';
 import type { TableStoreManager } from './tablestore.ts';
+import type { BrokerManager } from './broker.ts';
 import type { GatewayRoute } from './compute-templates.ts';
 
 export interface ComputeRouteDeps {
@@ -15,6 +16,7 @@ export interface ComputeRouteDeps {
   registry: RegistryManager;
   objectstore: ObjectStoreManager;
   tablestore: TableStoreManager;
+  broker: BrokerManager;
   /** resolves the workspace or null when it does not exist */
   requireInstance: (name: string) => Promise<unknown | null>;
   /** compute is swarm-only; other drivers get an honest 501 */
@@ -37,7 +39,7 @@ function tailFrom(req: Req): number {
 }
 
 export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDeps): void {
-  const { compute, devops, registry, objectstore, tablestore } = deps;
+  const { compute, devops, registry, objectstore, tablestore, broker } = deps;
   const base = '/api/instances/:name/compute';
 
   /** shared preamble: 501 off-swarm, 404 unknown workspace, then run + map errors */
@@ -456,6 +458,37 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     route(async (ws, req, reply) => {
       const { table } = req.params as { table: string };
       await tablestore.deleteTable(ws, table);
+      return reply.code(204).send();
+    }),
+  );
+
+  // — Message Broker: real RabbitMQ per workspace (AMQP + management UI) —
+  app.get(`${base}/broker`, route(async (ws) => broker.status(ws)));
+  app.post(
+    `${base}/broker`,
+    route(async (ws, _req, reply) => reply.code(201).send(await broker.enable(ws))),
+  );
+  app.delete(
+    `${base}/broker`,
+    route(async (ws, _req, reply) => {
+      await broker.disable(ws);
+      return reply.code(204).send();
+    }),
+  );
+  app.get(`${base}/broker/queues`, route(async (ws) => ({ queues: await broker.listQueues(ws) })));
+  app.post(
+    `${base}/broker/queues`,
+    route(async (ws, req, reply) => {
+      const { name } = (req.body ?? {}) as { name?: string };
+      await broker.createQueue(ws, name ?? '');
+      return reply.code(201).send({ ok: true });
+    }),
+  );
+  app.delete(
+    `${base}/broker/queues/:queue`,
+    route(async (ws, req, reply) => {
+      const { queue } = req.params as { queue: string };
+      await broker.deleteQueue(ws, decodeURIComponent(queue));
       return reply.code(204).send();
     }),
   );

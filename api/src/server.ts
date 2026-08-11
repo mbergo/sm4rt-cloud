@@ -18,6 +18,7 @@ import { DevopsManager } from './devops.ts';
 import { RegistryManager } from './registry.ts';
 import { ObjectStoreManager } from './objectstore.ts';
 import { TableStoreManager } from './tablestore.ts';
+import { BrokerManager } from './broker.ts';
 import { registerComputeRoutes } from './compute-routes.ts';
 import { Store } from './db.ts';
 import { registerDomainRoutes } from './domains.ts';
@@ -109,6 +110,7 @@ const devops = new DevopsManager(compute);
 const registry = new RegistryManager(compute);
 const objectstore = new ObjectStoreManager(compute);
 const tablestore = new TableStoreManager(compute);
+const broker = new BrokerManager(compute);
 if (computeEnabled) {
   devops.startReconciler(async () => (await provisioner.list()).map((i) => i.name));
 }
@@ -593,6 +595,7 @@ registerComputeRoutes(app, {
   registry,
   objectstore,
   tablestore,
+  broker,
   requireInstance: requireRunningInstance,
   enabled: computeEnabled,
 });

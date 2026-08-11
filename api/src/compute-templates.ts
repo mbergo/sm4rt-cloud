@@ -11,6 +11,7 @@ export const SM4RT_GITOPS_APP_LABEL = 'sm4rt.gitops.app';
 export const SSH_PORT_RANGE = { from: 22000, to: 22999 };
 export const DB_PORT_RANGE = { from: 15000, to: 15999 };
 export const CACHE_PORT_RANGE = { from: 16000, to: 16999 };
+export const BROKER_PORT_RANGE = { from: 17000, to: 17999 };
 
 export type VmImageId = 'ubuntu-24' | 'debian-12' | 'alpine-3';
 export type VmPlanId = 'nano' | 'small' | 'medium' | 'large';

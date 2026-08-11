@@ -443,3 +443,40 @@ export const deleteTable = (ws: string, name: string) =>
   request<void>(`${base(ws)}/tablestore/tables/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
+
+// — Message Broker (RabbitMQ, real AMQP) —
+
+export interface BrokerStatus {
+  enabled: boolean;
+  state: string;
+  host: string | null;
+  managementUrl: string | null;
+  amqpUrl: string | null;
+  user: string | null;
+  password: string | null;
+}
+
+export interface QueueInfo {
+  name: string;
+  vhost: string;
+  messages: number | null;
+  consumers: number | null;
+  state: string | null;
+}
+
+export const getBroker = (ws: string) => request<BrokerStatus>(`${base(ws)}/broker`);
+export const enableBroker = (ws: string) =>
+  request<BrokerStatus>(`${base(ws)}/broker`, { method: 'POST', body: '{}' });
+export const disableBroker = (ws: string) =>
+  request<void>(`${base(ws)}/broker`, { method: 'DELETE' });
+export const listQueues = (ws: string) =>
+  request<{ queues: QueueInfo[] }>(`${base(ws)}/broker/queues`);
+export const createQueue = (ws: string, name: string) =>
+  request<{ ok: boolean }>(`${base(ws)}/broker/queues`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+export const deleteQueue = (ws: string, name: string) =>
+  request<void>(`${base(ws)}/broker/queues/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });

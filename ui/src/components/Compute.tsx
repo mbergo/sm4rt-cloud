@@ -44,6 +44,7 @@ import {
   addGitopsApp,
   createBucket,
   createCache,
+  createQueue,
   createTable,
   createCdn,
   createDatabase,
@@ -54,6 +55,7 @@ import {
   databaseLogs,
   deleteBucket,
   deleteCache,
+  deleteQueue,
   deleteTable,
   deleteCdn,
   deleteDatabase,
@@ -61,16 +63,19 @@ import {
   deleteGateway,
   deleteRegistryTag,
   disableDevops,
+  disableBroker,
   disableObjectStore,
   disableObservability,
   disableTableStore,
   disableRegistry,
   enableDevops,
+  enableBroker,
   enableObjectStore,
   enableObservability,
   enableTableStore,
   enableRegistry,
   getDevops,
+  getBroker,
   getObjectStore,
   getObservability,
   getTableStore,
@@ -83,6 +88,7 @@ import {
   listGateways,
   listGitopsApps,
   listRegistryRepos,
+  listQueues,
   listTables,
   listTasks,
   listVms,
@@ -110,6 +116,8 @@ import {
   type BucketInfo,
   type ObjectStoreStatus,
   type ObsInfo,
+  type BrokerStatus,
+  type QueueInfo,
   type RegistryRepo,
   type RegistryStatus,
   type ServicePlanId,
@@ -2721,6 +2729,203 @@ export function TableStorePage({ instance, notify }: PageProps) {
                           title={`Delete ${table.name}`}
                           onClick={() =>
                             run(() => deleteTable(instance, table.name), `Table ${table.name} deleted`)
+                          }
+                          disabled={busy}
+                          className="text-stone-500 transition hover:text-rose-300 disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      )}
+    </PageShell>
+  );
+}
+
+export function BrokerPage({ instance, notify }: PageProps) {
+  const { data, error, swarmOnly, loading, refresh } = useComputeData(
+    useCallback(() => getBroker(instance), [instance]),
+  );
+  const queues = useComputeData(
+    useCallback(async () => {
+      const status = await getBroker(instance);
+      if (!status.enabled || status.state !== 'running') return { queues: [] as QueueInfo[] };
+      return listQueues(instance);
+    }, [instance]),
+    15000,
+  );
+  const [busy, setBusy] = useState(false);
+  const [newQueue, setNewQueue] = useState('');
+  const logs = useLogConsole();
+
+  const status: BrokerStatus | null = data;
+  const queueList: QueueInfo[] = queues.data?.queues ?? [];
+
+  const run = async (fn: () => Promise<unknown>, okMsg: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      notify(okMsg);
+      refresh(true);
+      queues.refresh(true);
+    } catch (err) {
+      notify(errMsg(err), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (swarmOnly)
+    return (
+      <PageShell icon={Box} title="Message broker" subtitle="Real RabbitMQ per workspace">
+        <SwarmOnlyNote />
+      </PageShell>
+    );
+
+  return (
+    <PageShell
+      icon={Box}
+      title="Message broker"
+      subtitle="Real RabbitMQ — AMQP endpoint + management UI at your workspace domain"
+      onRefresh={() => {
+        refresh();
+        queues.refresh();
+      }}
+      actions={
+        status?.enabled ? (
+          <GhostButton
+            onClick={() =>
+              logs.open({ instance, service: `sm4rt-mq-${instance}`, label: 'Message broker' })
+            }
+          >
+            <ScrollText className="h-3.5 w-3.5" /> Logs
+          </GhostButton>
+        ) : null
+      }
+    >
+      {error && !swarmOnly ? <ErrorNote message={error} /> : null}
+      {loading && !status ? (
+        <Card><EmptyState text="Loading…" /></Card>
+      ) : !status?.enabled ? (
+        <Card className="p-8 text-center">
+          <Box className="mx-auto h-10 w-10 text-amber-300/60" />
+          <p className="mt-3 font-display text-base font-semibold text-stone-100">
+            A real message broker, one click.
+          </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-stone-500">
+            Dedicated RabbitMQ with a public AMQP endpoint and the full management UI — pika,
+            amqplib, Spring AMQP and friends connect unchanged.
+          </p>
+          <PrimaryButton
+            onClick={() => run(() => enableBroker(instance), 'Broker deploying — ready in ~30s')}
+            disabled={busy}
+            className="mt-4"
+          >
+            {busy ? 'Deploying…' : 'Enable broker'}
+          </PrimaryButton>
+        </Card>
+      ) : (
+        <>
+          <Card className="space-y-3 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <StateDot state={status.state} />
+              <DangerButton
+                onClick={() => run(() => disableBroker(instance), 'Broker removed')}
+                disabled={busy}
+                confirmLabel="Confirm disable"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Disable
+              </DangerButton>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {status.amqpUrl ? <CopyRow label="AMQP URL" value={status.amqpUrl} secret /> : null}
+              {status.managementUrl ? (
+                <CopyRow label="Management UI" value={status.managementUrl} />
+              ) : null}
+              {status.user ? <CopyRow label="Username" value={status.user} /> : null}
+              {status.password ? <CopyRow label="Password" value={status.password} secret /> : null}
+            </div>
+          </Card>
+
+          {status.amqpUrl ? (
+            <Card className="space-y-3 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+                Publish & consume
+              </p>
+              <div className="grid gap-2">
+                <Snippet
+                  title="Python (pika)"
+                  code={`import pika\nconn = pika.BlockingConnection(pika.URLParameters('${status.amqpUrl}'))\nch = conn.channel()\nch.basic_publish(exchange='', routing_key='jobs', body=b'hello')`}
+                />
+                <Snippet
+                  title="Node (amqplib)"
+                  code={`const amqp = require('amqplib');\nconst conn = await amqp.connect('${status.amqpUrl}');`}
+                />
+              </div>
+            </Card>
+          ) : null}
+
+          <Card>
+            <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+                Queues
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  value={newQueue}
+                  onChange={(e) => setNewQueue(e.target.value)}
+                  placeholder="queue-name"
+                  className="w-44 rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
+                />
+                <GhostButton
+                  onClick={() =>
+                    run(async () => {
+                      await createQueue(instance, newQueue.trim());
+                      setNewQueue('');
+                    }, `Queue ${newQueue.trim()} created`)
+                  }
+                  disabled={busy || !newQueue.trim()}
+                  className="!px-2 !py-0.5 !text-xs"
+                >
+                  <Plus className="h-3 w-3" /> Create
+                </GhostButton>
+                <GhostButton onClick={() => queues.refresh()} className="!px-2 !py-0.5 !text-xs">
+                  <RefreshCw className="h-3 w-3" />
+                </GhostButton>
+              </div>
+            </div>
+            {queueList.length === 0 ? (
+              <EmptyState text="No queues yet — create one above or via AMQP." />
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <Th>Queue</Th>
+                    <Th>Messages</Th>
+                    <Th>Consumers</Th>
+                    <Th>State</Th>
+                    <Th> </Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {queueList.map((queue) => (
+                    <tr key={`${queue.vhost}/${queue.name}`}>
+                      <Td><Mono className="text-stone-200">{queue.name}</Mono></Td>
+                      <Td className="font-mono text-xs">{queue.messages ?? '—'}</Td>
+                      <Td className="font-mono text-xs">{queue.consumers ?? '—'}</Td>
+                      <Td className="text-xs text-stone-500">{queue.state ?? '—'}</Td>
+                      <Td className="text-right">
+                        <button
+                          type="button"
+                          title={`Delete ${queue.name}`}
+                          onClick={() =>
+                            run(() => deleteQueue(instance, queue.name), `Queue ${queue.name} deleted`)
                           }
                           disabled={busy}
                           className="text-stone-500 transition hover:text-rose-300 disabled:opacity-40"
