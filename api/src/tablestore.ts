@@ -280,12 +280,13 @@ export class TableStoreManager {
           Image: 'scylladb/scylla:6.2',
           Args: [
             '--smp', '1',
-            '--memory', '750M',
+            '--memory', '480M',
             '--overprovisioned', '1',
             '--alternator-port', '8000',
             '--alternator-write-isolation', 'only_rmw_uses_lwt',
             '--alternator-enforce-authorization', '1',
             '--authenticator', 'PasswordAuthenticator',
+            '--authorizer', 'CassandraAuthorizer',
           ],
           Labels: { [SM4RT_WS_LABEL]: ws, [SM4RT_KIND_LABEL]: 'tablestore', [SM4RT_NAME_LABEL]: 'ddb' },
           Mounts: [
