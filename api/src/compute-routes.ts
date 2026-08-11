@@ -535,4 +535,5 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
 
   // — Summary for the workspace overview page —
   app.get(`${base}/summary`, route(async (ws) => compute.summary(ws)));
+  app.get(`${base}/discovery`, route(async (ws) => ({ services: await compute.discovery(ws) })));
 }

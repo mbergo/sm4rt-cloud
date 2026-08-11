@@ -1687,6 +1687,39 @@ export class ComputeManager {
     return counts;
   }
 
+  /**
+   * Live service discovery for the workspace dashboard: every sm4rt-labelled
+   * service with its real task state, resolved in two docker calls.
+   */
+  async discovery(
+    ws: string,
+  ): Promise<Array<{ kind: string; name: string; service: string; state: string; createdAt: string | null }>> {
+    const svcs = await this.listByLabels([`${SM4RT_WS_LABEL}=${ws}`]);
+    let tasks: Array<Record<string, any>> = [];
+    try {
+      tasks = (await this.docker.listTasks({
+        filters: JSON.stringify({ label: [`${SM4RT_WS_LABEL}=${ws}`] }),
+      })) as Array<Record<string, any>>;
+    } catch {
+      tasks = [];
+    }
+    const runningByService = new Set<string>();
+    for (const t of tasks) {
+      if (t.Status?.State === 'running' && t.DesiredState === 'running') {
+        runningByService.add(String(t.ServiceID));
+      }
+    }
+    return svcs
+      .map((s) => ({
+        kind: s.Spec.Labels?.[SM4RT_KIND_LABEL] ?? 'other',
+        name: s.Spec.Labels?.[SM4RT_NAME_LABEL] ?? s.Spec.Name,
+        service: s.Spec.Name,
+        state: runningByService.has(String(s.ID)) ? 'running' : 'starting',
+        createdAt: (s as Record<string, any>).CreatedAt ?? null,
+      }))
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  }
+
   /** Remove every sm4rt service + config for a workspace (workspace delete). */
   async deleteAllFor(ws: string): Promise<number> {
     const svcs = await this.listByLabels([`${SM4RT_WS_LABEL}=${ws}`]);

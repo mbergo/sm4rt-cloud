@@ -14,6 +14,52 @@ export function BrandMark({ size = 'md' }: { size?: 'md' | 'lg' }) {
   );
 }
 
+/**
+ * BrandLoader — the S4 provisioning spinner. Two counter-rotating orbit
+ * rings around the breathing logo, with an animated status line.
+ * Sizes: 'sm' inline (rows/cards), 'lg' hero (full-page provisioning).
+ */
+export function BrandLoader({
+  label = 'Provisioning',
+  sublabel,
+  size = 'lg',
+}: {
+  label?: string;
+  sublabel?: string;
+  size?: 'sm' | 'lg';
+}) {
+  if (size === 'sm') {
+    return (
+      <span className="inline-flex items-center gap-2.5">
+        <span className="relative inline-flex h-6 w-6 items-center justify-center">
+          <span className="s4-orbit-ring absolute inset-0 rounded-full" />
+          <span className="s4-breathe flex h-3.5 w-3.5 items-center justify-center rounded-[5px] bg-gradient-to-br from-amber-400 to-orange-600">
+            <span className="text-[6px] font-display font-bold text-white">S4</span>
+          </span>
+        </span>
+        <span className="s4-dots text-xs text-stone-400">{label}</span>
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-col items-center justify-center gap-5 py-14">
+      <div className="relative flex h-24 w-24 items-center justify-center">
+        <div className="s4-orbit-ring absolute inset-0 rounded-full" />
+        <div className="s4-orbit-ring-slow absolute inset-2 rounded-full" />
+        <div className="s4-breathe flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-600 shadow-lg shadow-orange-500/40">
+          <span className="font-display text-lg font-bold text-white">S4</span>
+        </div>
+      </div>
+      <div className="text-center">
+        <p className="s4-dots font-display text-sm font-semibold uppercase tracking-widest text-stone-200">
+          {label}
+        </p>
+        {sublabel ? <p className="mt-1.5 text-xs text-stone-500">{sublabel}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 const STATUS_STYLES: Record<Instance['status'], { dot: string; text: string; label: string }> = {
   running: { dot: 'bg-emerald-400', text: 'text-emerald-300', label: 'Running' },
   provisioning: { dot: 'bg-amber-400 animate-pulse', text: 'text-amber-300', label: 'Provisioning' },

@@ -343,6 +343,17 @@ export const removeGitopsApp = (ws: string, app: string) =>
 
 export const computeSummary = (ws: string) => request<Record<string, number>>(`${base(ws)}/summary`);
 
+export interface DiscoveredService {
+  kind: string;
+  name: string;
+  service: string;
+  state: string;
+  createdAt: string | null;
+}
+
+export const computeDiscovery = (ws: string) =>
+  request<{ services: DiscoveredService[] }>(`${base(ws)}/discovery`);
+
 // — Container Registry (registry:2, docker push real) —
 
 export interface RegistryStatus {

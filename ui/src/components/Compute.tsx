@@ -136,7 +136,7 @@ import {
 } from '../lib/compute';
 import { timeAgo } from '../lib/format';
 import { useLogConsole } from '../lib/log-console';
-import { CopyButton, GhostButton, PrimaryButton } from './bits';
+import { BrandLoader, CopyButton, GhostButton, PrimaryButton } from './bits';
 
 type Notify = (message: string, tone?: 'ok' | 'err') => void;
 interface PageProps {
@@ -533,7 +533,7 @@ export function ServersPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && vms.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : vms.length === 0 ? (
           <EmptyState text="No servers yet. Launch one — it boots in seconds and you SSH straight in." />
         ) : (
@@ -751,7 +751,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && tasks.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : tasks.length === 0 ? (
           <EmptyState text="No containers yet. Deploy any public image and get an HTTPS URL instantly." />
         ) : (
@@ -985,7 +985,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && dbs.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : dbs.length === 0 ? (
           <EmptyState text="No databases yet. Create one — connection string ready in seconds." />
         ) : (
@@ -1152,7 +1152,7 @@ export function CachesPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && caches.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : caches.length === 0 ? (
           <EmptyState text="No caches yet. Redis PING in under 10 seconds." />
         ) : (
@@ -1305,7 +1305,7 @@ export function DnsPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && records.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : records.length === 0 ? (
           <EmptyState text="No records yet. Add an ALIAS pointing to a container task or any URL." />
         ) : (
@@ -1499,7 +1499,7 @@ export function GatewaysPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && gateways.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : gateways.length === 0 ? (
           <EmptyState text="No gateways yet. Compose one URL out of many backends." />
         ) : (
@@ -1664,7 +1664,7 @@ export function CdnPage({ instance, notify }: PageProps) {
 
       <Card>
         {loading && cdns.length === 0 ? (
-          <EmptyState text="Loading…" />
+          <div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div>
         ) : cdns.length === 0 ? (
           <EmptyState text="No distributions yet. Put Varnish in front of any origin in one step." />
         ) : (
@@ -1782,7 +1782,7 @@ export function ObservabilityPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !obs ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !obs ? (
         <Card className="p-8 text-center">
           <Activity className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -1921,7 +1921,7 @@ export function DevopsPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !status ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !status?.enabled ? (
         <Card className="p-8 text-center">
           <GitBranch className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -1940,7 +1940,7 @@ export function DevopsPage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <StateDot state={status.state} />
+              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
               <div className="flex gap-2">
                 {!status.bootstrapped ? (
                   <GhostButton
@@ -2204,7 +2204,7 @@ export function RegistryPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !status ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !status?.enabled ? (
         <Card className="p-8 text-center">
           <Container className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -2227,7 +2227,7 @@ export function RegistryPage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <StateDot state={status.state} />
+              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
               <DangerButton
                 onClick={() => run(() => disableRegistry(instance), 'Registry removed')}
                 disabled={busy}
@@ -2390,7 +2390,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !status ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !status?.enabled ? (
         <Card className="p-8 text-center">
           <Archive className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -2415,7 +2415,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <StateDot state={status.state} />
+              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
               <DangerButton
                 onClick={() => run(() => disableObjectStore(instance), 'Object store removed')}
                 disabled={busy}
@@ -2598,7 +2598,7 @@ export function TableStorePage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !status ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !status?.enabled ? (
         <Card className="p-8 text-center">
           <Database className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -2623,7 +2623,7 @@ export function TableStorePage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <StateDot state={status.state} />
+              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
               <DangerButton
                 onClick={() => run(() => disableTableStore(instance), 'Table store removed')}
                 disabled={busy}
@@ -2817,7 +2817,7 @@ export function BrokerPage({ instance, notify }: PageProps) {
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       {loading && !status ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : !status?.enabled ? (
         <Card className="p-8 text-center">
           <Box className="mx-auto h-10 w-10 text-amber-300/60" />
@@ -2840,7 +2840,7 @@ export function BrokerPage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <StateDot state={status.state} />
+              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
               <DangerButton
                 onClick={() => run(() => disableBroker(instance), 'Broker removed')}
                 disabled={busy}
@@ -3043,7 +3043,7 @@ export function FunctionsRealPage({ instance, notify }: PageProps) {
       </Card>
 
       {loading && !data ? (
-        <Card><EmptyState text="Loading…" /></Card>
+        <Card><div className="flex justify-center py-6"><BrandLoader size="sm" label="Loading" /></div></Card>
       ) : fns.length === 0 ? (
         <Card className="p-8 text-center">
           <Zap className="mx-auto h-10 w-10 text-amber-300/60" />

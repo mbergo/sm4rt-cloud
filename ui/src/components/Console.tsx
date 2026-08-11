@@ -124,7 +124,7 @@ import {
   type ServiceId,
 } from '../lib/api';
 import { snippets, timeAgo, timeUntil } from '../lib/format';
-import { CopyButton, GhostButton, PrimaryButton, StatusBadge } from './bits';
+import { BrandLoader, CopyButton, GhostButton, PrimaryButton, StatusBadge } from './bits';
 import {
   CachesPage,
   CdnPage,
@@ -141,7 +141,7 @@ import {
   ServersPage,
   TableStorePage,
 } from './Compute';
-import { computeSummary } from '../lib/compute';
+import { computeSummary, computeDiscovery, type DiscoveredService } from '../lib/compute';
 import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
@@ -583,7 +583,12 @@ export default function Console({
         {missing ? (
           <p className="mt-8 text-sm text-stone-400">This instance no longer exists.</p>
         ) : !detail ? (
-          <div className="mt-8 h-40 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]" />
+          <BrandLoader label="Loading workspace" sublabel={name} />
+        ) : detail.status === 'provisioning' ? (
+          <BrandLoader
+            label="Provisioning workspace"
+            sublabel={`${name} — spinning up your environment on the cluster`}
+          />
         ) : section === 'overview' ? (
           <Overview detail={detail} notify={notify} onDeleted={onBack} onNavigate={setSection} />
         ) : section === 'logs-instance' ? (
@@ -657,6 +662,7 @@ function Overview({
   const [snippet, setSnippet] = useState('cli');
   const [confirming, setConfirming] = useState(false);
   const [summary, setSummary] = useState<Record<string, number> | null>(null);
+  const [discovered, setDiscovered] = useState<DiscoveredService[] | null>(null);
   const [services, setServices] = useState<RealServiceInfo[] | null>(null);
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [memHistory, setMemHistory] = useState<number[]>([]);
@@ -699,6 +705,24 @@ function Overview({
         });
     load();
     const timer = setInterval(load, 15000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [detail.name]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      computeDiscovery(detail.name)
+        .then((data) => {
+          if (alive) setDiscovered(data.services);
+        })
+        .catch(() => {
+          if (alive) setDiscovered(null);
+        });
+    load();
+    const timer = setInterval(load, 10000);
     return () => {
       alive = false;
       clearInterval(timer);
@@ -847,6 +871,36 @@ function Overview({
                 </button>
               );
             })}
+          </div>
+        </section>
+      ) : null}
+      {discovered && discovered.length > 0 ? (
+        <section>
+          <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
+            <Activity className="h-3.5 w-3.5 text-emerald-400" /> Live services
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] normal-case tracking-normal text-stone-400">
+              {discovered.filter((d) => d.state === 'running').length}/{discovered.length} running
+            </span>
+          </h3>
+          <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
+            {discovered.map((svc) => (
+              <div
+                key={svc.service}
+                className="flex items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2"
+              >
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    svc.state === 'running' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+                  }`}
+                />
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-xs text-stone-200">{svc.name}</p>
+                  <p className="truncate text-[10px] uppercase tracking-wider text-stone-500">
+                    {svc.kind}
+                  </p>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       ) : null}
