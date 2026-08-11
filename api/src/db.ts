@@ -26,13 +26,22 @@ export interface UserRow {
   createdAt: string;
 }
 
+export interface CoolifyServerRow {
+  id: string;
+  label: string;
+  url: string;
+  token: string;
+  createdAt: string;
+}
+
 interface Snapshot {
   users: UserRow[];
   domains: DomainRow[];
   workspaceSettings: Record<string, { defaultDomain: string | null }>;
+  coolifyServers: CoolifyServerRow[];
 }
 
-const EMPTY: Snapshot = { users: [], domains: [], workspaceSettings: {} };
+const EMPTY: Snapshot = { users: [], domains: [], workspaceSettings: {}, coolifyServers: [] };
 
 export class Store {
   readonly backend: 'postgres' | 'file';
@@ -76,6 +85,13 @@ export class Store {
           default_domain text,
           updated_at timestamptz NOT NULL DEFAULT now()
         );
+        CREATE TABLE IF NOT EXISTS coolify_servers (
+          id text PRIMARY KEY,
+          label text NOT NULL,
+          url text NOT NULL,
+          token text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
       `);
       await this.reloadFromPg();
       return;
@@ -93,12 +109,13 @@ export class Store {
 
   private async reloadFromPg(): Promise<void> {
     if (!this.pool) return;
-    const [users, domains, settings] = await Promise.all([
+    const [users, domains, settings, coolify] = await Promise.all([
       this.pool.query('SELECT clerk_id, email, created_at FROM users'),
       this.pool.query(
         'SELECT domain, workspace, verify_token, status, created_at, verified_at FROM domains',
       ),
       this.pool.query('SELECT workspace, default_domain FROM workspace_settings'),
+      this.pool.query('SELECT id, label, url, token, created_at FROM coolify_servers'),
     ]);
     this.cache = {
       users: users.rows.map((r) => ({
@@ -117,6 +134,13 @@ export class Store {
       workspaceSettings: Object.fromEntries(
         settings.rows.map((r) => [r.workspace, { defaultDomain: r.default_domain }]),
       ),
+      coolifyServers: coolify.rows.map((r) => ({
+        id: r.id,
+        label: r.label,
+        url: r.url,
+        token: r.token,
+        createdAt: new Date(r.created_at).toISOString(),
+      })),
     };
   }
 
@@ -271,5 +295,43 @@ export class Store {
     } else {
       this.persistFile();
     }
+  }
+
+  // — coolify servers (admin-registered; the env-configured one lives outside the store) —
+
+  listCoolifyServers(): CoolifyServerRow[] {
+    return this.cache.coolifyServers.map((s) => ({ ...s }));
+  }
+
+  async addCoolifyServer(input: { label: string; url: string; token: string }): Promise<CoolifyServerRow> {
+    const row: CoolifyServerRow = {
+      id: `coolify-${randomBytes(6).toString('hex')}`,
+      label: input.label,
+      url: input.url.replace(/\/+$/, ''),
+      token: input.token,
+      createdAt: new Date().toISOString(),
+    };
+    this.cache.coolifyServers.push(row);
+    if (this.pool) {
+      await this.pool.query(
+        'INSERT INTO coolify_servers (id, label, url, token) VALUES ($1, $2, $3, $4)',
+        [row.id, row.label, row.url, row.token],
+      );
+    } else {
+      this.persistFile();
+    }
+    return { ...row };
+  }
+
+  async removeCoolifyServer(id: string): Promise<boolean> {
+    const idx = this.cache.coolifyServers.findIndex((s) => s.id === id);
+    if (idx < 0) return false;
+    this.cache.coolifyServers.splice(idx, 1);
+    if (this.pool) {
+      await this.pool.query('DELETE FROM coolify_servers WHERE id = $1', [id]);
+    } else {
+      this.persistFile();
+    }
+    return true;
   }
 }

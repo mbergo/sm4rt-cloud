@@ -19,6 +19,19 @@ import { RegistryManager } from './registry.ts';
 import { registerComputeRoutes } from './compute-routes.ts';
 import { Store } from './db.ts';
 import { registerDomainRoutes } from './domains.ts';
+import {
+  azureDefaultsFromEnv,
+  buildAzureCreateCommand,
+  buildJoinScript,
+  checkCoolifyHealth,
+  type CoolifyServer,
+} from './admin-pool.ts';
+import {
+  CACHE_PLANS,
+  DB_PLANS,
+  TASK_PLANS,
+  VM_PLANS,
+} from './compute-templates.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -258,6 +271,117 @@ app.get('/api/admin/nodes', async () => ({ nodes: await provisioner.nodes() }));
 
 app.get('/api/admin/join-command', async () => ({
   joinCommand: await provisioner.joinCommand(),
+}));
+
+// — node pool: join script + default Azure provisioning command —
+
+const AZURE_DEFAULTS = azureDefaultsFromEnv(process.env);
+const COOLIFY_URL = (process.env.COOLIFY_URL ?? '').replace(/\/+$/, '');
+const COOLIFY_TOKEN = process.env.COOLIFY_TOKEN ?? '';
+
+// Plain bash so a fresh VM can `curl -u admin:… …/join-script | sudo bash`.
+app.get('/api/admin/pool/join-script', async (_request, reply) => {
+  const joinCommand = await provisioner.joinCommand();
+  if (!joinCommand) {
+    return reply.code(503).send({ error: 'join command unavailable for this driver' });
+  }
+  return reply.type('text/plain; charset=utf-8').send(buildJoinScript(joinCommand));
+});
+
+app.get('/api/admin/pool/azure-command', async (request, reply) => {
+  const joinCommand = await provisioner.joinCommand();
+  if (!joinCommand) {
+    return reply.code(503).send({ error: 'join command unavailable for this driver' });
+  }
+  const q = request.query as { name?: string; count?: string };
+  const count = Number(q.count ?? '1');
+  return {
+    defaults: AZURE_DEFAULTS,
+    command: buildAzureCreateCommand({
+      joinCommand,
+      defaults: AZURE_DEFAULTS,
+      ...(q.name ? { name: q.name } : {}),
+      ...(Number.isFinite(count) ? { count } : {}),
+    }),
+  };
+});
+
+// — coolify servers: slot 1 comes from env (mirrors the local mcp.json
+//   coolify entry), extra slots are registered through the store —
+
+app.get('/api/admin/coolify/servers', async () => {
+  const entries: Array<{ id: string; label: string; url: string; token: string; source: CoolifyServer['source'] }> = [];
+  if (COOLIFY_URL && COOLIFY_TOKEN) {
+    entries.push({
+      id: 'env',
+      label: new URL(COOLIFY_URL).hostname,
+      url: COOLIFY_URL,
+      token: COOLIFY_TOKEN,
+      source: 'env',
+    });
+  }
+  for (const row of store.listCoolifyServers()) {
+    entries.push({ id: row.id, label: row.label, url: row.url, token: row.token, source: 'registered' });
+  }
+  const servers: CoolifyServer[] = await Promise.all(
+    entries.map(async (e) => {
+      const health = await checkCoolifyHealth(e.url, e.token);
+      return {
+        id: e.id,
+        label: e.label,
+        url: e.url,
+        source: e.source,
+        healthy: health.healthy,
+        version: health.version,
+      };
+    }),
+  );
+  return { servers };
+});
+
+app.post('/api/admin/coolify/servers', async (request, reply) => {
+  const body = (request.body ?? {}) as { label?: string; url?: string; token?: string };
+  const url = (body.url ?? '').trim().replace(/\/+$/, '');
+  const token = (body.token ?? '').trim();
+  if (!/^https?:\/\//.test(url) || !token) {
+    return reply.code(400).send({ error: 'url (http/https) and token are required' });
+  }
+  const label = (body.label ?? '').trim() || new URL(url).hostname;
+  const health = await checkCoolifyHealth(url, token);
+  if (!health.healthy) {
+    return reply.code(400).send({ error: `coolify at ${url} did not answer /api/v1/version with this token` });
+  }
+  const row = await store.addCoolifyServer({ label, url, token });
+  return reply.code(201).send({
+    server: {
+      id: row.id,
+      label: row.label,
+      url: row.url,
+      source: 'registered',
+      healthy: true,
+      version: health.version,
+    } satisfies CoolifyServer,
+  });
+});
+
+app.delete('/api/admin/coolify/servers/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  if (id === 'env') {
+    return reply.code(400).send({ error: 'the env-configured server cannot be removed here' });
+  }
+  const removed = await store.removeCoolifyServer(id);
+  return removed ? { ok: true } : reply.code(404).send({ error: 'not found' });
+});
+
+// — service size offerings (read-only catalog for the admin dropdowns) —
+
+app.get('/api/admin/plans', async () => ({
+  categories: [
+    { id: 'vm', label: 'Virtual machines', plans: VM_PLANS },
+    { id: 'database', label: 'Databases (RDS)', plans: DB_PLANS },
+    { id: 'cache', label: 'Cache clusters', plans: CACHE_PLANS },
+    { id: 'task', label: 'Container tasks', plans: TASK_PLANS },
+  ],
 }));
 
 // Aggregate node capacity; usage is only meaningful when every node reports it,
