@@ -480,3 +480,35 @@ export const deleteQueue = (ws: string, name: string) =>
   request<void>(`${base(ws)}/broker/queues/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
+
+// — Functions (real FaaS — user code in its own container) —
+
+export interface FunctionInfo {
+  name: string;
+  state: string;
+  url: string;
+  runtime: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface FunctionDetail extends FunctionInfo {
+  code: string;
+}
+
+export const listFunctions = (ws: string) =>
+  request<{ functions: FunctionInfo[] }>(`${base(ws)}/functions`);
+export const createFunction = (ws: string, name: string, code?: string) =>
+  request<FunctionInfo>(`${base(ws)}/functions`, {
+    method: 'POST',
+    body: JSON.stringify({ name, ...(code !== undefined ? { code } : {}) }),
+  });
+export const getFunction = (ws: string, fn: string) =>
+  request<FunctionDetail>(`${base(ws)}/functions/${encodeURIComponent(fn)}`);
+export const updateFunction = (ws: string, fn: string, code: string) =>
+  request<{ ok: boolean }>(`${base(ws)}/functions/${encodeURIComponent(fn)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ code }),
+  });
+export const deleteFunction = (ws: string, fn: string) =>
+  request<void>(`${base(ws)}/functions/${encodeURIComponent(fn)}`, { method: 'DELETE' });

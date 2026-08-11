@@ -133,6 +133,7 @@ import {
   DatabasesPage,
   DevopsPage,
   DnsPage,
+  FunctionsRealPage,
   GatewaysPage,
   ObjectStorePage,
   ObservabilityPage,
@@ -162,7 +163,8 @@ type SectionId =
   | 'marketplace'
   | 'objectstore'
   | 'tablestore'
-  | 'broker';
+  | 'broker'
+  | 'functions-real';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -185,6 +187,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'ec2', label: 'Servers', icon: Server, group: 'Compute' },
   { id: 'ecs', label: 'Containers', icon: Ship, group: 'Compute' },
   { id: 'lambda', label: 'Functions', icon: Zap, group: 'Compute' },
+  { id: 'functions-real', label: 'Functions (FaaS)', icon: Zap, group: 'Compute' },
   { id: 'ecr', label: 'Container registry', icon: Container, group: 'Compute' },
   { id: 'athena', label: 'Athena SQL', icon: FileSearch, group: 'Analytics' },
   { id: 'glue', label: 'Glue catalog', icon: TableProperties, group: 'Analytics' },
@@ -623,6 +626,8 @@ export default function Console({
           <TableStorePage instance={name} notify={notify} />
         ) : section === 'broker' ? (
           <BrokerPage instance={name} notify={notify} />
+        ) : section === 'functions-real' ? (
+          <FunctionsRealPage instance={name} notify={notify} />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (

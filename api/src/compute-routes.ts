@@ -8,6 +8,7 @@ import type { RegistryManager } from './registry.ts';
 import type { ObjectStoreManager } from './objectstore.ts';
 import type { TableStoreManager } from './tablestore.ts';
 import type { BrokerManager } from './broker.ts';
+import type { FunctionsManager } from './functions.ts';
 import type { GatewayRoute } from './compute-templates.ts';
 
 export interface ComputeRouteDeps {
@@ -17,6 +18,7 @@ export interface ComputeRouteDeps {
   objectstore: ObjectStoreManager;
   tablestore: TableStoreManager;
   broker: BrokerManager;
+  functions: FunctionsManager;
   /** resolves the workspace or null when it does not exist */
   requireInstance: (name: string) => Promise<unknown | null>;
   /** compute is swarm-only; other drivers get an honest 501 */
@@ -39,7 +41,7 @@ function tailFrom(req: Req): number {
 }
 
 export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDeps): void {
-  const { compute, devops, registry, objectstore, tablestore, broker } = deps;
+  const { compute, devops, registry, objectstore, tablestore, broker, functions } = deps;
   const base = '/api/instances/:name/compute';
 
   /** shared preamble: 501 off-swarm, 404 unknown workspace, then run + map errors */
@@ -489,6 +491,44 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     route(async (ws, req, reply) => {
       const { queue } = req.params as { queue: string };
       await broker.deleteQueue(ws, decodeURIComponent(queue));
+      return reply.code(204).send();
+    }),
+  );
+
+  // — Functions: real FaaS — user code running in its own container —
+  app.get(`${base}/functions`, route(async (ws) => ({ functions: await functions.list(ws) })));
+  app.post(
+    `${base}/functions`,
+    route(async (ws, req, reply) => {
+      const body = (req.body ?? {}) as { name?: string; code?: string };
+      const created = await functions.create(ws, {
+        name: body.name ?? '',
+        ...(body.code !== undefined ? { code: body.code } : {}),
+      });
+      return reply.code(201).send(created);
+    }),
+  );
+  app.get(
+    `${base}/functions/:fn`,
+    route(async (ws, req) => {
+      const { fn } = req.params as { fn: string };
+      return functions.get(ws, fn);
+    }),
+  );
+  app.put(
+    `${base}/functions/:fn`,
+    route(async (ws, req) => {
+      const { fn } = req.params as { fn: string };
+      const { code } = (req.body ?? {}) as { code?: string };
+      await functions.updateCode(ws, fn, code ?? '');
+      return { ok: true };
+    }),
+  );
+  app.delete(
+    `${base}/functions/:fn`,
+    route(async (ws, req, reply) => {
+      const { fn } = req.params as { fn: string };
+      await functions.remove(ws, fn);
       return reply.code(204).send();
     }),
   );

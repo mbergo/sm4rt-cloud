@@ -44,6 +44,7 @@ import {
   addGitopsApp,
   createBucket,
   createCache,
+  createFunction,
   createQueue,
   createTable,
   createCdn,
@@ -55,6 +56,7 @@ import {
   databaseLogs,
   deleteBucket,
   deleteCache,
+  deleteFunction,
   deleteQueue,
   deleteTable,
   deleteCdn,
@@ -76,6 +78,7 @@ import {
   enableRegistry,
   getDevops,
   getBroker,
+  getFunction,
   getObjectStore,
   getObservability,
   getTableStore,
@@ -88,6 +91,7 @@ import {
   listGateways,
   listGitopsApps,
   listRegistryRepos,
+  listFunctions,
   listQueues,
   listTables,
   listTasks,
@@ -99,6 +103,7 @@ import {
   taskAction,
   taskLogs,
   updateGateway,
+  updateFunction,
   updateTask,
   vmAction,
   vmLogs,
@@ -113,6 +118,7 @@ import {
   type GatewayInfo,
   type GatewayRoute,
   type GitopsApp,
+  type FunctionInfo,
   type BucketInfo,
   type ObjectStoreStatus,
   type ObsInfo,
@@ -2940,6 +2946,192 @@ export function BrokerPage({ instance, notify }: PageProps) {
             )}
           </Card>
         </>
+      )}
+    </PageShell>
+  );
+}
+
+const DEFAULT_FN_CODE = `// Export a handler: receives { method, path, headers, body },
+// returns { status?, headers?, body }.
+module.exports = async function handler(req) {
+  return {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'hello world', path: req.path, method: req.method }),
+  };
+};
+`;
+
+export function FunctionsRealPage({ instance, notify }: PageProps) {
+  const { data, error, swarmOnly, loading, refresh } = useComputeData(
+    useCallback(() => listFunctions(instance), [instance]),
+    10000,
+  );
+  const [busy, setBusy] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const logs = useLogConsole();
+
+  const fns: FunctionInfo[] = data?.functions ?? [];
+
+  const run = async (fn: () => Promise<unknown>, okMsg: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      notify(okMsg);
+      refresh(true);
+    } catch (err) {
+      notify(errMsg(err), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openEditor = async (fn: string) => {
+    try {
+      const detail = await getFunction(instance, fn);
+      setCode(detail.code || DEFAULT_FN_CODE);
+      setEditing(fn);
+    } catch (err) {
+      notify(errMsg(err), 'err');
+    }
+  };
+
+  if (swarmOnly)
+    return (
+      <PageShell icon={Zap} title="Functions" subtitle="Your code, running in real containers">
+        <SwarmOnlyNote />
+      </PageShell>
+    );
+
+  return (
+    <PageShell
+      icon={Zap}
+      title="Functions"
+      subtitle="Real FaaS — each function is your JavaScript running in its own container with a public URL"
+      onRefresh={() => refresh()}
+    >
+      {error && !swarmOnly ? <ErrorNote message={error} /> : null}
+
+      <Card className="space-y-3 p-4">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+          Deploy a function
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="function-name"
+            className="w-56 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-amber-400/50"
+          />
+          <PrimaryButton
+            onClick={() =>
+              run(async () => {
+                await createFunction(instance, newName.trim());
+                setNewName('');
+              }, `Function ${newName.trim()} deploying — live in ~15s`)
+            }
+            disabled={busy || !newName.trim()}
+          >
+            <Plus className="h-4 w-4" /> Deploy hello world
+          </PrimaryButton>
+        </div>
+        <p className="text-xs text-stone-500">
+          Ships with a hello-world handler — edit the code right here after it deploys.
+        </p>
+      </Card>
+
+      {loading && !data ? (
+        <Card><EmptyState text="Loading…" /></Card>
+      ) : fns.length === 0 ? (
+        <Card className="p-8 text-center">
+          <Zap className="mx-auto h-10 w-10 text-amber-300/60" />
+          <p className="mt-3 font-display text-base font-semibold text-stone-100">
+            No functions yet.
+          </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-stone-500">
+            Deploy one above — it gets its own container and a public HTTPS URL in seconds.
+          </p>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {fns.map((fn) => (
+            <Card key={fn.name} className="p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <StateDot state={fn.state} />
+                <Mono className="text-sm text-stone-100">{fn.name}</Mono>
+                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-widest text-stone-400">
+                  {fn.runtime}
+                </span>
+                <a
+                  href={fn.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-xs text-amber-300 hover:underline"
+                >
+                  {fn.url.replace(/^https?:\/\//, '')}
+                </a>
+                <div className="ml-auto flex items-center gap-2">
+                  <GhostButton
+                    onClick={() => openEditor(fn.name)}
+                    className="!px-2.5 !py-1 !text-xs"
+                  >
+                    Edit code
+                  </GhostButton>
+                  <GhostButton
+                    onClick={() =>
+                      logs.open({
+                        instance,
+                        service: `sm4rt-fn-${instance}-${fn.name}`,
+                        label: `fn ${fn.name}`,
+                      })
+                    }
+                    className="!px-2.5 !py-1 !text-xs"
+                  >
+                    <ScrollText className="h-3 w-3" /> Logs
+                  </GhostButton>
+                  <button
+                    type="button"
+                    title={`Delete ${fn.name}`}
+                    onClick={() =>
+                      run(() => deleteFunction(instance, fn.name), `Function ${fn.name} deleted`)
+                    }
+                    disabled={busy}
+                    className="text-stone-500 transition hover:text-rose-300 disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              {editing === fn.name ? (
+                <div className="mt-3 space-y-2">
+                  <textarea
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    spellCheck={false}
+                    rows={Math.min(24, Math.max(8, code.split('\n').length + 1))}
+                    className="w-full rounded-xl border border-white/10 bg-stone-950/70 p-3 font-mono text-xs leading-relaxed text-stone-200 outline-none focus:border-amber-400/50"
+                  />
+                  <div className="flex gap-2">
+                    <PrimaryButton
+                      onClick={() =>
+                        run(async () => {
+                          await updateFunction(instance, fn.name, code);
+                          setEditing(null);
+                        }, `${fn.name} redeploying with new code`)
+                      }
+                      disabled={busy}
+                    >
+                      Save & redeploy
+                    </PrimaryButton>
+                    <GhostButton onClick={() => setEditing(null)}>Cancel</GhostButton>
+                  </div>
+                </div>
+              ) : null}
+            </Card>
+          ))}
+        </div>
       )}
     </PageShell>
   );
