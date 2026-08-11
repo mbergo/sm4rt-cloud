@@ -76,7 +76,16 @@ export function buildAzureCreateCommand(opts: {
   const base = (opts.name ?? 'sm4rt-5').trim() || 'sm4rt-5';
   const rawCount = Math.floor(opts.count ?? 1);
   const count = Number.isFinite(rawCount) ? Math.min(10, Math.max(1, rawCount)) : 1;
-  const names = Array.from({ length: count }, (_, i) => (i === 0 ? base : `${base}${i + 1}`));
+  // "sm4rt-5" ×3 → sm4rt-5, sm4rt-6, sm4rt-7; a base without a numeric
+  // suffix gets 2, 3, … appended instead.
+  const suffixMatch = /^(.*?)(\d+)$/.exec(base);
+  const names = Array.from({ length: count }, (_, i) => {
+    if (i === 0) return base;
+    if (suffixMatch) {
+      return `${suffixMatch[1]}${Number(suffixMatch[2]) + i}`;
+    }
+    return `${base}${i + 1}`;
+  });
   const create = (vm: string) =>
     [
       `az vm create \\`,

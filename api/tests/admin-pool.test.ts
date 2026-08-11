@@ -71,6 +71,19 @@ test('buildAzureCreateCommand count > 1 produces numbered names, capped at 10', 
   assert.equal((capped.match(/az vm create/g) ?? []).length, 10);
 });
 
+test('buildAzureCreateCommand increments a trailing number in the base name', () => {
+  const cmd = buildAzureCreateCommand({
+    joinCommand: JOIN,
+    defaults: azureDefaultsFromEnv({}),
+    name: 'sm4rt-5',
+    count: 3,
+  });
+  assert.ok(cmd.includes('--name sm4rt-5'));
+  assert.ok(cmd.includes('--name sm4rt-6'));
+  assert.ok(cmd.includes('--name sm4rt-7'));
+  assert.ok(!cmd.includes('--name sm4rt-52'));
+});
+
 test('buildAzureCreateCommand tolerates blank name and NaN count', () => {
   const cmd = buildAzureCreateCommand({
     joinCommand: JOIN,
