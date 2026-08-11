@@ -549,21 +549,22 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
   iceberg: {
     id: 'iceberg',
     label: 'Iceberg Catalog',
-    description: 'Apache Iceberg REST catalog backed by Ozone S3 (Glue-style table catalog / cold storage).',
+    description: 'Apache Iceberg REST catalog backed by the workspace SeaweedFS S3 (cold storage table catalog).',
     image: 'apache/iceberg-rest-fixture:1.10.1',
     category: 'pipelines',
     ports: [{ name: 'http', port: 8181 }],
     probePort: 8181,
     startupSeconds: 90,
     env: ({ serviceHost }) => {
-      const ozoneHost = serviceHost.replace('svc-iceberg', 'svc-ozone');
+      // Fresh S3 = the workspace Garage (sm4rt-s3-<ws>); Ozone retired from this path.
+      const ws = serviceHost.replace(/^svc-iceberg\./, '').split('.')[0];
       return [
         { name: 'CATALOG_WAREHOUSE', value: 's3://iceberg/' },
         { name: 'CATALOG_IO__IMPL', value: 'org.apache.iceberg.aws.s3.S3FileIO' },
-        { name: 'CATALOG_S3_ENDPOINT', value: `http://${ozoneHost}:9878` },
+        { name: 'CATALOG_S3_ENDPOINT', value: `http://sm4rt-s3-${ws}:8333` },
         { name: 'CATALOG_S3_PATH__STYLE__ACCESS', value: 'true' },
-        { name: 'AWS_ACCESS_KEY_ID', value: 'floci' },
-        { name: 'AWS_SECRET_ACCESS_KEY', value: 'floci-secret' },
+        { name: 'AWS_ACCESS_KEY_ID', value: 'GKfloci0lake0static' },
+        { name: 'AWS_SECRET_ACCESS_KEY', value: 'floci-secret-lake-0000000000000000' },
         { name: 'AWS_REGION', value: 'us-east-1' },
       ];
     },
@@ -575,7 +576,7 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'REST catalog (in-cluster)', value: `http://${serviceHost}:8181` },
       ...(externalUrl ? [{ label: 'REST catalog (public)', value: externalUrl }] : []),
-      { label: 'Warehouse', value: 's3://iceberg/ (create the bucket in Ozone S3 first)' },
+      { label: 'Warehouse', value: 's3://iceberg/ (bucket in the workspace Garage S3)' },
     ],
   },
   trino: {
@@ -595,11 +596,11 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
         'iceberg.catalog.type=rest',
         'iceberg.rest-catalog.uri=${ICEBERG_REST_URI}',
         'fs.native-s3.enabled=true',
-        's3.endpoint=${OZONE_S3_ENDPOINT}',
+        's3.endpoint=${LAKE_S3_ENDPOINT}',
         's3.region=us-east-1',
         's3.path-style-access=true',
-        's3.aws-access-key=floci',
-        's3.aws-secret-key=floci-secret',
+        's3.aws-access-key=GKfloci0lake0static',
+        's3.aws-secret-key=floci-secret-lake-0000000000000000',
         'EOF',
         'exec /usr/lib/trino/bin/run-trino',
       ].join('\n'),
@@ -609,9 +610,11 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     startupSeconds: 180,
     env: ({ serviceHost }) => {
       const ns = serviceHost.replace(/^svc-trino\./, '');
+      const ws = ns.split('.')[0];
       return [
         { name: 'ICEBERG_REST_URI', value: `http://svc-iceberg.${ns}:8181` },
-        { name: 'OZONE_S3_ENDPOINT', value: `http://svc-ozone.${ns}:9878` },
+        // Fresh S3 = the workspace Garage; Ozone retired from the lake path.
+        { name: 'LAKE_S3_ENDPOINT', value: `http://sm4rt-s3-${ws}:8333` },
         { name: 'CATALOG_MANAGEMENT', value: 'static' },
       ];
     },

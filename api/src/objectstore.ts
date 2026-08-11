@@ -1,15 +1,22 @@
-// ObjectStoreManager — Sm4rt Object Store: one real Garage (Rust, by
-// deuxfleurs) per workspace, published over HTTPS via caddy-docker-proxy at
-// s3.<ws>.<domain>, speaking the genuine S3 API so aws cli / SDKs work
-// unchanged (path-style). Chosen over MinIO (license concerns) and
-// SeaweedFS — and it aligns with the platform's Rust direction.
+// ObjectStoreManager — Sm4rt Object Store: one real SeaweedFS per workspace
+// (Apache-2.0, Haystack-paper architecture), published over HTTPS via
+// caddy-docker-proxy at s3.<ws>.<domain>, speaking the genuine S3 API so
+// aws cli / SDKs work unchanged (path-style).
 //
-// Garage v2.3 bootstraps its default access key and bucket from env vars
-// (--single-node --default-bucket). Listing uses the S3 API; bucket
-// create/delete run the garage CLI inside the container (docker exec,
-// manager-pinned service) because S3 CreateBucket requires a global key
-// permission the default key does not carry.
-import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
+// Chosen over MinIO (license) and Garage (S3 API gaps — HEAD 400 with
+// aws-cli v2 — and performance declared a non-goal upstream). SeaweedFS also
+// ships an embedded Iceberg REST catalog, which the lake path uses.
+//
+// Credentials live in an s3.json identities file (docker config). The
+// workspace key carries Admin, so bucket create/delete go through the plain
+// S3 API — no CLI/exec needed. A static lake key (used by the Iceberg/Trino
+// catalog services) is provisioned alongside it.
+import {
+  S3Client,
+  ListBucketsCommand,
+  CreateBucketCommand,
+  DeleteBucketCommand,
+} from '@aws-sdk/client-s3';
 import { randomBytes } from 'node:crypto';
 import type Docker from 'dockerode';
 import {
@@ -21,9 +28,13 @@ import { ComputeError, type ComputeManager } from './compute.ts';
 
 const NETWORK_NAME = process.env.SWARM_NETWORK ?? 'floci-net';
 
+/** Static identity for the shared lake path (Iceberg REST / Trino / Spark). */
+export const LAKE_ACCESS_KEY = 'GKfloci0lake0static';
+export const LAKE_SECRET_KEY = 'floci-secret-lake-0000000000000000';
+
 interface ObjectStoreSecrets {
-  user: string; // S3 access key id (GK…)
-  pass: string; // S3 secret key
+  user: string;
+  pass: string;
 }
 
 export interface ObjectStoreStatus {
@@ -49,22 +60,26 @@ export function isValidBucketName(name: string): boolean {
   return true;
 }
 
-/** garage.toml for a single-node, workspace-scoped deployment. */
-export function garageConfig(rpcSecret: string): string {
-  return `metadata_dir = "/var/lib/garage/meta"
-data_dir = "/var/lib/garage/data"
-db_engine = "sqlite"
-replication_factor = 1
-
-rpc_bind_addr = "[::]:3901"
-rpc_public_addr = "127.0.0.1:3901"
-rpc_secret = "${rpcSecret}"
-
-[s3_api]
-s3_region = "us-east-1"
-api_bind_addr = "[::]:3900"
-root_domain = ".s3.garage.localhost"
-`;
+/** seaweedfs s3.json — workspace admin identity + static lake identity. */
+export function seaweedS3Config(secrets: { user: string; pass: string }): string {
+  return JSON.stringify(
+    {
+      identities: [
+        {
+          name: secrets.user,
+          credentials: [{ accessKey: secrets.user, secretKey: secrets.pass }],
+          actions: ['Admin', 'Read', 'Write', 'List', 'Tagging'],
+        },
+        {
+          name: 'lake-static',
+          credentials: [{ accessKey: LAKE_ACCESS_KEY, secretKey: LAKE_SECRET_KEY }],
+          actions: ['Read', 'Write', 'List', 'Tagging'],
+        },
+      ],
+    },
+    null,
+    2,
+  );
 }
 
 function cpusToNano(c: number): number {
@@ -143,7 +158,7 @@ export class ObjectStoreManager {
     await this.docker.createConfig({
       Name: name,
       Data: Buffer.from(data, 'utf8').toString('base64'),
-      Labels: { [SM4RT_KIND_LABEL]: 'objectstore-toml' },
+      Labels: { [SM4RT_KIND_LABEL]: 'objectstore-auth' },
     });
     const configs = (await this.docker.listConfigs({
       filters: JSON.stringify({ name: [name] }),
@@ -194,45 +209,6 @@ export class ObjectStoreManager {
     }
   }
 
-  // — garage CLI via docker exec (service is manager-pinned) —
-  private async garageCli(ws: string, args: string[]): Promise<string> {
-    const containers = (await this.docker.listContainers({
-      filters: JSON.stringify({
-        label: [`com.docker.swarm.service.name=${this.serviceName(ws)}`],
-      }),
-    })) as Array<{ Id: string }>;
-    if (containers.length === 0) {
-      throw new ComputeError(503, 'object store container not found on this node');
-    }
-    const container = this.docker.getContainer(containers[0].Id);
-    const exec = await container.exec({
-      Cmd: ['/garage', ...args],
-      AttachStdout: true,
-      AttachStderr: true,
-    });
-    const stream = await exec.start({});
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      stream.on('data', (c: Buffer) => chunks.push(c));
-      stream.on('end', resolve);
-      stream.on('error', reject);
-    });
-    const raw = Buffer.concat(chunks);
-    let out = '';
-    let offset = 0;
-    while (offset + 8 <= raw.length) {
-      const size = raw.readUInt32BE(offset + 4);
-      out += raw.subarray(offset + 8, offset + 8 + size).toString('utf8');
-      offset += 8 + size;
-    }
-    const text = out || raw.toString('utf8');
-    const inspect = (await exec.inspect()) as { ExitCode?: number };
-    if ((inspect.ExitCode ?? 0) !== 0) {
-      throw new ComputeError(502, `garage ${args.join(' ')} failed: ${text.trim().slice(0, 300)}`);
-    }
-    return text;
-  }
-
   // ————————————————— enable / status / disable —————————————————
 
   async status(ws: string): Promise<ObjectStoreStatus> {
@@ -259,13 +235,13 @@ export class ObjectStoreManager {
       throw new ComputeError(409, 'object store already enabled');
     }
     const secrets: ObjectStoreSecrets = {
-      user: `GK${randomBytes(16).toString('hex')}`,
-      pass: randomBytes(32).toString('hex'),
+      user: `${ws}-admin`,
+      pass: randomBytes(20).toString('hex'),
     };
     await this.writeConfig(this.secretsConfig(ws), secrets);
-    const toml = await this.createConfigRaw(
-      `sm4rt-s3-${ws}-toml`,
-      garageConfig(randomBytes(32).toString('hex')),
+    const auth = await this.createConfigRaw(
+      `sm4rt-s3-${ws}-auth`,
+      seaweedS3Config(secrets),
     );
     const name = this.serviceName(ws);
     const host = this.host(ws);
@@ -275,38 +251,38 @@ export class ObjectStoreManager {
         [SM4RT_KIND_LABEL]: 'objectstore',
         [SM4RT_WS_LABEL]: ws,
         [SM4RT_NAME_LABEL]: 's3',
-        ...this.compute.caddyLabelsFor(host, 3900),
+        ...this.compute.caddyLabelsFor(host, 8333),
       },
       TaskTemplate: {
         ContainerSpec: {
-          Image: 'dxflrs/garage:v2.3.0',
-          Args: ['/garage', 'server', '--single-node', '--default-bucket'],
-          Env: [
-            `GARAGE_DEFAULT_ACCESS_KEY=${secrets.user}`,
-            `GARAGE_DEFAULT_SECRET_KEY=${secrets.pass}`,
-            `GARAGE_DEFAULT_BUCKET=${ws}-default`,
+          Image: 'chrislusf/seaweedfs:3.97',
+          Args: [
+            'server',
+            '-dir=/data',
+            '-s3',
+            '-s3.port=8333',
+            '-s3.config=/etc/seaweedfs/s3.json',
+            '-master.volumeSizeLimitMB=1024',
           ],
           Labels: { [SM4RT_WS_LABEL]: ws, [SM4RT_KIND_LABEL]: 'objectstore', [SM4RT_NAME_LABEL]: 's3' },
           Mounts: [
             {
               Type: 'volume',
               Source: `${name}-data`,
-              Target: '/var/lib/garage',
+              Target: '/data',
               VolumeOptions: { Labels: { [SM4RT_WS_LABEL]: ws } },
             } as unknown as Docker.MountSettings,
           ],
           Configs: [
             {
-              ConfigID: toml.id,
-              ConfigName: toml.name,
-              File: { Name: '/etc/garage.toml', UID: '0', GID: '0', Mode: 0o444 },
+              ConfigID: auth.id,
+              ConfigName: auth.name,
+              File: { Name: '/etc/seaweedfs/s3.json', UID: '0', GID: '0', Mode: 0o444 },
             },
           ],
         },
-        Resources: { Limits: { NanoCPUs: cpusToNano(1), MemoryBytes: mbToBytes(512) } },
+        Resources: { Limits: { NanoCPUs: cpusToNano(1), MemoryBytes: mbToBytes(768) } },
         RestartPolicy: { Condition: 'any', Delay: 5_000_000_000 },
-        // manager node: bucket create/delete run the garage CLI via exec
-        Placement: { Constraints: ['node.role == manager'] },
         Networks: [{ Target: NETWORK_NAME, Aliases: [name] }],
       },
       Mode: { Replicated: { Replicas: 1 } },
@@ -322,7 +298,7 @@ export class ObjectStoreManager {
       await this.docker.getService(name).remove();
     }
     await this.removeConfigsByPrefix(this.secretsConfig(ws));
-    await this.removeConfigsByPrefix(`sm4rt-s3-${ws}-toml`);
+    await this.removeConfigsByPrefix(`sm4rt-s3-${ws}-auth`);
     try {
       await this.docker.getVolume(`${name}-data`).remove();
     } catch {
@@ -331,7 +307,7 @@ export class ObjectStoreManager {
     if (!svc) throw new ComputeError(404, 'object store not enabled');
   }
 
-  // ————————————————— buckets —————————————————
+  // ————————————————— buckets (plain S3 API — ws key has Admin) —————————————————
 
   private async s3(ws: string, endpoint: string): Promise<S3Client> {
     const secrets = await this.readConfig<ObjectStoreSecrets>(this.secretsConfig(ws));
@@ -344,60 +320,66 @@ export class ObjectStoreManager {
     });
   }
 
-  async listBuckets(ws: string): Promise<BucketInfo[]> {
-    // overlay first (prod), public edge fallback (local dev) — registry pattern
-    const tryList = async (endpoint: string) => {
-      const client = await this.s3(ws, endpoint);
-      const res = await client.send(new ListBucketsCommand({}));
-      return (res.Buckets ?? []).map((b) => ({
-        name: b.Name ?? '',
-        createdAt: b.CreationDate ? b.CreationDate.toISOString() : null,
-      }));
-    };
+  private async withS3<T>(ws: string, fn: (client: S3Client) => Promise<T>): Promise<T> {
+    // overlay DNS first (prod), public edge fallback (local dev) — registry pattern
     try {
-      return await tryList(`http://${this.serviceName(ws)}:3900`);
+      const inner = await this.s3(ws, `http://${this.serviceName(ws)}:8333`);
+      return await fn(inner);
     } catch (err) {
       if (err instanceof ComputeError) throw err;
+      const named = (err as { name?: string }).name ?? '';
+      if (named && !/ENOTFOUND|ECONN|EAI_AGAIN|TimeoutError/.test(`${named} ${String(err)}`)) {
+        throw err; // a real S3 error from the service — don't mask it via the edge
+      }
+      const outer = await this.s3(ws, `${this.scheme()}://${this.host(ws)}`);
       try {
-        return await tryList(`${this.scheme()}://${this.host(ws)}`);
+        return await fn(outer);
       } catch (err2) {
         throw new ComputeError(502, `object store unreachable: ${(err2 as Error).message}`);
       }
     }
   }
 
+  async listBuckets(ws: string): Promise<BucketInfo[]> {
+    return this.withS3(ws, async (client) => {
+      const res = await client.send(new ListBucketsCommand({}));
+      return (res.Buckets ?? []).map((b) => ({
+        name: b.Name ?? '',
+        createdAt: b.CreationDate ? b.CreationDate.toISOString() : null,
+      }));
+    });
+  }
+
   async createBucket(ws: string, bucket: string): Promise<void> {
     if (!isValidBucketName(bucket)) {
       throw new ComputeError(400, 'invalid bucket name (3-63 chars, lowercase, s3 rules)');
     }
-    const secrets = await this.readConfig<ObjectStoreSecrets>(this.secretsConfig(ws));
-    if (!secrets) throw new ComputeError(503, 'object store secrets not found');
-    const existing = await this.listBuckets(ws);
-    if (existing.some((b) => b.name === bucket)) {
-      throw new ComputeError(409, `bucket ${bucket} already exists`);
-    }
-    await this.garageCli(ws, ['bucket', 'create', bucket]);
-    await this.garageCli(ws, [
-      'bucket', 'allow', '--read', '--write', '--owner', bucket, '--key', secrets.user,
-    ]);
+    await this.withS3(ws, async (client) => {
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: bucket }));
+      } catch (err) {
+        const name = (err as { name?: string }).name ?? '';
+        if (name === 'BucketAlreadyOwnedByYou' || name === 'BucketAlreadyExists') {
+          throw new ComputeError(409, `bucket ${bucket} already exists`);
+        }
+        throw err;
+      }
+    });
   }
 
   async deleteBucket(ws: string, bucket: string): Promise<void> {
     if (!isValidBucketName(bucket)) {
       throw new ComputeError(400, 'invalid bucket name');
     }
-    const existing = await this.listBuckets(ws);
-    if (!existing.some((b) => b.name === bucket)) {
-      throw new ComputeError(404, `bucket ${bucket} not found`);
-    }
-    try {
-      await this.garageCli(ws, ['bucket', 'delete', '--yes', bucket]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/not empty|objects/i.test(msg)) {
-        throw new ComputeError(409, `bucket ${bucket} is not empty`);
+    await this.withS3(ws, async (client) => {
+      try {
+        await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+      } catch (err) {
+        const name = (err as { name?: string }).name ?? '';
+        if (name === 'NoSuchBucket') throw new ComputeError(404, `bucket ${bucket} not found`);
+        if (name === 'BucketNotEmpty') throw new ComputeError(409, `bucket ${bucket} is not empty`);
+        throw err;
       }
-      throw err;
-    }
+    });
   }
 }

@@ -2356,7 +2356,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
 
   if (swarmOnly)
     return (
-      <PageShell icon={Archive} title="Object store" subtitle="S3-compatible buckets (MinIO)">
+      <PageShell icon={Archive} title="Object store" subtitle="S3-compatible buckets (SeaweedFS)">
         <SwarmOnlyNote />
       </PageShell>
     );
@@ -2367,7 +2367,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
     <PageShell
       icon={Archive}
       title="Object store"
-      subtitle="Real S3 API served by MinIO — aws cli, SDKs and mc work unchanged"
+      subtitle="Real S3 API served by SeaweedFS — aws cli, SDKs and mc work unchanged"
       onRefresh={() => {
         refresh();
         buckets.refresh();
@@ -2398,7 +2398,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
             Real S3 buckets, one click.
           </p>
           <p className="mx-auto mt-1 max-w-md text-sm text-stone-500">
-            A dedicated MinIO server at your workspace domain speaking the genuine S3 protocol —
+            A dedicated SeaweedFS server at your workspace domain speaking the genuine S3 protocol —
             point the AWS CLI or any SDK at it and go. Credentials generated automatically.
           </p>
           <PrimaryButton
