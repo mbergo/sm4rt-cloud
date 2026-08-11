@@ -26,6 +26,7 @@ import {
   checkCoolifyHealth,
   type CoolifyServer,
 } from './admin-pool.ts';
+import { MarketplaceError, MarketplaceManager } from './marketplace.ts';
 import {
   CACHE_PLANS,
   DB_PLANS,
@@ -589,6 +590,79 @@ registerComputeRoutes(app, {
   requireInstance: requireRunningInstance,
   enabled: computeEnabled,
 });
+
+// — Coolify marketplace: one-click apps on the shared server, 1:1 ws↔project —
+
+const marketplace = new MarketplaceManager({
+  url: process.env.COOLIFY_URL ?? '',
+  token: process.env.COOLIFY_TOKEN ?? '',
+});
+
+function marketplaceRoute<T>(
+  handler: (ws: string, req: Parameters<Parameters<typeof app.get>[1]>[0]) => Promise<T>,
+) {
+  return async (
+    req: Parameters<Parameters<typeof app.get>[1]>[0],
+    reply: Parameters<Parameters<typeof app.get>[1]>[1],
+  ) => {
+    if (!marketplace.enabled) {
+      return reply.code(503).send({ error: 'marketplace is not configured on this deployment' });
+    }
+    const { name } = req.params as { name: string };
+    const instance = await requireRunningInstance(name);
+    if (!instance) return reply.code(404).send({ error: 'instance not found' });
+    try {
+      return await handler(name, req);
+    } catch (err) {
+      const code = err instanceof MarketplaceError ? err.statusCode : 500;
+      req.log.warn({ err, ws: name }, 'marketplace route error');
+      return reply.code(code).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+}
+
+app.get(
+  '/api/instances/:name/marketplace/templates',
+  marketplaceRoute(async () => ({ templates: await marketplace.listTemplates() })),
+);
+
+app.get(
+  '/api/instances/:name/marketplace/apps',
+  marketplaceRoute(async (ws) => ({ apps: await marketplace.listApps(ws) })),
+);
+
+app.post(
+  '/api/instances/:name/marketplace/apps',
+  marketplaceRoute(async (ws, req) => {
+    const body = (req.body ?? {}) as { type?: string; name?: string };
+    const created = await marketplace.createApp(ws, {
+      type: body.type ?? '',
+      ...(body.name ? { name: body.name } : {}),
+    });
+    return created;
+  }),
+);
+
+app.post(
+  '/api/instances/:name/marketplace/apps/:uuid/:action',
+  marketplaceRoute(async (ws, req) => {
+    const { uuid, action } = req.params as { uuid: string; action: string };
+    if (action !== 'start' && action !== 'stop' && action !== 'restart') {
+      throw new MarketplaceError(400, `unknown action: ${action}`);
+    }
+    await marketplace.appAction(ws, uuid, action);
+    return { ok: true };
+  }),
+);
+
+app.delete(
+  '/api/instances/:name/marketplace/apps/:uuid',
+  marketplaceRoute(async (ws, req) => {
+    const { uuid } = req.params as { uuid: string };
+    await marketplace.deleteApp(ws, uuid);
+    return { ok: true };
+  }),
+);
 
 // Custom tenant domains (register → verify via public DNS → set as default).
 const EDGE_IP = process.env.EDGE_IP ?? '';

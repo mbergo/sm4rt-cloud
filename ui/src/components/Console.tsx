@@ -141,6 +141,7 @@ import { computeSummary } from '../lib/compute';
 import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
+import MarketplacePage from './Marketplace';
 
 type SectionId =
   | 'overview'
@@ -154,7 +155,8 @@ type SectionId =
   | 'cdn'
   | 'domains'
   | 'observability'
-  | 'devops';
+  | 'devops'
+  | 'marketplace';
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -183,6 +185,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'cdn', label: 'CDN', icon: HardDrive, group: 'Web & edge' },
   { id: 'domains', label: 'Custom domains', icon: Globe, group: 'Web & edge' },
   { id: 'devops', label: 'Sm4rt DevOps', icon: GitBranch, group: 'Platform' },
+  { id: 'marketplace', label: 'Marketplace', icon: Boxes, group: 'Platform' },
   { id: 'observability', label: 'Observability', icon: Activity, group: 'Platform' },
   { id: 'iam', label: 'IAM', icon: ShieldCheck, group: 'Security & identity' },
   { id: 'kms', label: 'KMS keys', icon: Lock, group: 'Security & identity' },
@@ -603,6 +606,8 @@ export default function Console({
           <ObservabilityPage instance={name} notify={notify} />
         ) : section === 'devops' ? (
           <DevopsPage instance={name} notify={notify} />
+        ) : section === 'marketplace' ? (
+          <MarketplacePage instance={name} notify={notify} />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (
