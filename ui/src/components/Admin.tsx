@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Copy, Cpu, HardDrive, Network, RefreshCw, Server, ShieldCheck } from 'lucide-react';
+import {
+  Cloud,
+  Copy,
+  Cpu,
+  HardDrive,
+  Layers,
+  Network,
+  Plus,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Trash2,
+} from 'lucide-react';
 import { BrandMark, PrimaryButton } from './bits';
 import type { Instance } from '../lib/api';
 
@@ -30,6 +42,22 @@ interface Overview {
 }
 
 const AUTH_KEY = 'floci-admin-auth';
+
+interface CoolifyServer {
+  id: string;
+  label: string;
+  url: string;
+  source: 'env' | 'registered';
+  healthy: boolean | null;
+  version: string | null;
+}
+
+interface PlanCategory {
+  id: string;
+  label: string;
+  plans: Record<string, { label: string; cpus: number; memoryMb: number }>;
+}
+
 
 function gb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
@@ -132,6 +160,341 @@ function AdminLogin({ onSignedIn }: { onSignedIn: (auth: string) => void }) {
         </PrimaryButton>
       </form>
     </main>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-white/10"
+    >
+      <Copy className="h-3.5 w-3.5" /> {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
+
+// Default `az vm create` block (identical machines) + curl|bash join script.
+function AzureProvisionSection({ auth }: { auth: string }) {
+  const [name, setName] = useState('sm4rt-5');
+  const [count, setCount] = useState(1);
+  const [command, setCommand] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ name, count: String(count) });
+    const timer = setTimeout(() => {
+      fetch(`/api/admin/pool/azure-command?${params}`, { headers: { authorization: auth } })
+        .then(async (res) => (res.ok ? ((await res.json()) as { command: string }) : null))
+        .then((data) => setCommand(data?.command ?? null))
+        .catch(() => setCommand(null));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [auth, name, count]);
+
+  const joinScriptCurl = `curl -fsSL -u ADMIN_USER:ADMIN_PASS ${window.location.origin}/api/admin/pool/join-script | sudo bash`;
+
+  return (
+    <section>
+      <h2 className="mb-3 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
+        <Cloud className="h-4 w-4" /> Provision identical VMs (Azure CLI)
+      </h2>
+      <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="text-xs text-stone-400">
+            Base name
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 block w-44 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-amber-400/50"
+            />
+          </label>
+          <label className="text-xs text-stone-400">
+            Count
+            <select
+              value={count}
+              onChange={(e) => setCount(Number(e.target.value))}
+              className="mt-1 block w-24 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-amber-400/50"
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-stone-500">
+            Same spec as the current fleet: Standard_B2ms · Ubuntu 24.04 · westus2 ·
+            sm4rt-vnet. The cloud-init joins the swarm automatically on first boot.
+          </p>
+        </div>
+        {command ? (
+          <div className="flex items-start gap-3">
+            <pre className="min-w-0 flex-1 overflow-x-auto rounded-xl border border-white/10 bg-stone-950/60 p-4 font-mono text-xs leading-relaxed text-stone-300">
+              {command}
+            </pre>
+            <CopyButton text={command} />
+          </div>
+        ) : (
+          <div className="h-24 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+        )}
+        <div>
+          <p className="mb-2 text-xs uppercase tracking-wider text-stone-500">
+            Already have a VM? Add it to the pool with one line:
+          </p>
+          <div className="flex items-center gap-3">
+            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-xl border border-white/10 bg-stone-950/60 p-3 font-mono text-xs text-stone-300">
+              {joinScriptCurl}
+            </code>
+            <CopyButton text={joinScriptCurl} />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Two-slot Coolify area: slot 1 mirrors the env/mcp.json server, slot 2 is a
+// registration form persisted in the store.
+function CoolifySection({ auth }: { auth: string }) {
+  const [servers, setServers] = useState<CoolifyServer[] | null>(null);
+  const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    fetch('/api/admin/coolify/servers', { headers: { authorization: auth } })
+      .then(async (res) => (res.ok ? ((await res.json()) as { servers: CoolifyServer[] }) : null))
+      .then((data) => setServers(data?.servers ?? []))
+      .catch(() => setServers([]));
+  }, [auth]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const register = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/coolify/servers', {
+        method: 'POST',
+        headers: { authorization: auth, 'content-type': 'application/json' },
+        body: JSON.stringify({ url, token }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      setUrl('');
+      setToken('');
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'registration failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (!window.confirm('Remove this Coolify server from the pool?')) return;
+    await fetch(`/api/admin/coolify/servers/${id}`, {
+      method: 'DELETE',
+      headers: { authorization: auth },
+    }).catch(() => undefined);
+    refresh();
+  };
+
+  const slots: Array<CoolifyServer | null> = [servers?.[0] ?? null, servers?.[1] ?? null];
+
+  return (
+    <section>
+      <h2 className="mb-3 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
+        <Layers className="h-4 w-4" /> Coolify servers (shared services)
+      </h2>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {slots.map((server, index) =>
+          server ? (
+            <div
+              key={server.id}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${
+                    server.healthy ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`}
+                />
+                <span className="font-mono text-sm text-stone-100">{server.label}</span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-widest text-stone-400">
+                  {server.source === 'env' ? 'mcp.json / env' : 'registered'}
+                </span>
+                {server.source === 'registered' ? (
+                  <button
+                    type="button"
+                    onClick={() => remove(server.id)}
+                    className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-400 transition hover:bg-rose-500/10 hover:text-rose-400"
+                    aria-label="Remove"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
+              <p className="mt-2 font-mono text-xs text-stone-400">{server.url}</p>
+              <p className="mt-1 text-xs text-stone-500">
+                {server.healthy
+                  ? `healthy${server.version ? ` · v${server.version}` : ''}`
+                  : 'unreachable — check URL/token'}
+              </p>
+            </div>
+          ) : index === 1 && servers !== null ? (
+            <div
+              key="empty-slot"
+              className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5"
+            >
+              <p className="mb-3 text-xs uppercase tracking-wider text-stone-500">
+                Register another Coolify server
+              </p>
+              <div className="space-y-2">
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://coolify.example.com"
+                  className="block w-full rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-amber-400/50"
+                />
+                <input
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="API token"
+                  type="password"
+                  className="block w-full rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-sm text-stone-100 outline-none focus:border-amber-400/50"
+                />
+                {error ? <p className="text-xs text-rose-400">{error}</p> : null}
+                <PrimaryButton onClick={register} disabled={busy || !url || !token}>
+                  <Plus className="h-4 w-4" /> {busy ? 'Checking…' : 'Register'}
+                </PrimaryButton>
+              </div>
+            </div>
+          ) : (
+            <div
+              key={`skeleton-${index}`}
+              className="h-28 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]"
+            />
+          ),
+        )}
+      </div>
+    </section>
+  );
+}
+
+// Read-only catalog of service size offerings, browsable with dropdowns.
+function PlansSection({ auth }: { auth: string }) {
+  const [categories, setCategories] = useState<PlanCategory[] | null>(null);
+  const [categoryId, setCategoryId] = useState('vm');
+  const [planId, setPlanId] = useState<string>('');
+
+  useEffect(() => {
+    fetch('/api/admin/plans', { headers: { authorization: auth } })
+      .then(async (res) => (res.ok ? ((await res.json()) as { categories: PlanCategory[] }) : null))
+      .then((data) => setCategories(data?.categories ?? []))
+      .catch(() => setCategories([]));
+  }, [auth]);
+
+  const category = categories?.find((c) => c.id === categoryId) ?? categories?.[0] ?? null;
+  const planEntries = category ? Object.entries(category.plans) : [];
+  const selected = category?.plans[planId] ?? planEntries[0]?.[1] ?? null;
+
+  return (
+    <section>
+      <h2 className="mb-3 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
+        <ShieldCheck className="h-4 w-4" /> Service size offerings
+      </h2>
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+        {category ? (
+          <>
+            <div className="flex flex-wrap items-end gap-4">
+              <label className="text-xs text-stone-400">
+                Service
+                <select
+                  value={category.id}
+                  onChange={(e) => {
+                    setCategoryId(e.target.value);
+                    setPlanId('');
+                  }}
+                  className="mt-1 block w-52 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/50"
+                >
+                  {categories?.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-stone-400">
+                Size
+                <select
+                  value={planId || planEntries[0]?.[0] || ''}
+                  onChange={(e) => setPlanId(e.target.value)}
+                  className="mt-1 block w-64 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/50"
+                >
+                  {planEntries.map(([id, plan]) => (
+                    <option key={id} value={id}>
+                      {id} — {plan.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selected ? (
+                <div className="flex gap-6 rounded-xl border border-white/10 bg-stone-950/50 px-4 py-2.5">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest text-stone-500">vCPU</p>
+                    <p className="font-mono text-sm text-stone-100">{selected.cpus}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest text-stone-500">Memory</p>
+                    <p className="font-mono text-sm text-stone-100">
+                      {selected.memoryMb >= 1024
+                        ? `${selected.memoryMb / 1024} GB`
+                        : `${selected.memoryMb} MB`}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <table className="mt-4 w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wider text-stone-500">
+                <tr>
+                  <th className="py-2">Plan</th>
+                  <th className="py-2">Label</th>
+                  <th className="py-2">vCPU</th>
+                  <th className="py-2">Memory</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {planEntries.map(([id, plan]) => (
+                  <tr key={id}>
+                    <td className="py-2 font-mono text-xs">{id}</td>
+                    <td className="py-2 text-xs text-stone-400">{plan.label}</td>
+                    <td className="py-2 font-mono text-xs">{plan.cpus}</td>
+                    <td className="py-2 font-mono text-xs">
+                      {plan.memoryMb >= 1024 ? `${plan.memoryMb / 1024} GB` : `${plan.memoryMb} MB`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <div className="h-20 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -334,6 +697,12 @@ function AdminDashboard({
                 </p>
               </section>
             ) : null}
+
+            <AzureProvisionSection auth={auth} />
+
+            <CoolifySection auth={auth} />
+
+            <PlansSection auth={auth} />
 
             <section>
               <h2 className="mb-3 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
