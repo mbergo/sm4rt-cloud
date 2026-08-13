@@ -31,6 +31,7 @@ import {
   type CoolifyServer,
 } from './admin-pool.ts';
 import { MarketplaceError, MarketplaceManager } from './marketplace.ts';
+import { PaasError, PaasManager } from './paas.ts';
 import {
   CACHE_PLANS,
   DB_PLANS,
@@ -724,6 +725,113 @@ app.delete(
   marketplaceRoute(async (ws, req) => {
     const { uuid } = req.params as { uuid: string };
     await marketplace.deleteApp(ws, uuid);
+    return { ok: true };
+  }),
+);
+
+// — PaaS: Render-style git deploys + managed databases (embedded engine) —
+
+const paas = new PaasManager({
+  url: process.env.COOLIFY_URL ?? '',
+  token: process.env.COOLIFY_TOKEN ?? '',
+});
+
+function paasRoute<T>(
+  handler: (ws: string, req: Parameters<Parameters<typeof app.get>[1]>[0]) => Promise<T>,
+) {
+  return async (
+    req: Parameters<Parameters<typeof app.get>[1]>[0],
+    reply: Parameters<Parameters<typeof app.get>[1]>[1],
+  ) => {
+    if (!paas.enabled) {
+      return reply.code(503).send({ error: 'paas is not configured on this deployment' });
+    }
+    const { name } = req.params as { name: string };
+    const instance = await requireRunningInstance(name);
+    if (!instance) return reply.code(404).send({ error: 'instance not found' });
+    try {
+      return await handler(name, req);
+    } catch (err) {
+      const code = err instanceof PaasError ? err.statusCode : 500;
+      req.log.warn({ err, ws: name }, 'paas route error');
+      return reply.code(code).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+}
+
+app.get(
+  '/api/instances/:name/paas/apps',
+  paasRoute(async (ws) => ({ apps: await paas.listApps(ws) })),
+);
+app.post(
+  '/api/instances/:name/paas/apps',
+  paasRoute(async (ws, req) => {
+    const body = (req.body ?? {}) as {
+      name?: string;
+      repository?: string;
+      branch?: string;
+      buildPack?: string;
+      port?: number;
+    };
+    return paas.createApp(ws, {
+      name: body.name ?? '',
+      repository: body.repository ?? '',
+      ...(body.branch ? { branch: body.branch } : {}),
+      ...(body.buildPack ? { buildPack: body.buildPack } : {}),
+      ...(typeof body.port === 'number' ? { port: body.port } : {}),
+    });
+  }),
+);
+app.post(
+  '/api/instances/:name/paas/apps/:uuid/:action',
+  paasRoute(async (ws, req) => {
+    const { uuid, action } = req.params as { uuid: string; action: string };
+    if (!['start', 'stop', 'restart', 'deploy'].includes(action)) {
+      throw new PaasError(400, `unknown action: ${action}`);
+    }
+    await paas.appAction(ws, uuid, action as 'start' | 'stop' | 'restart' | 'deploy');
+    return { ok: true };
+  }),
+);
+app.delete(
+  '/api/instances/:name/paas/apps/:uuid',
+  paasRoute(async (ws, req) => {
+    const { uuid } = req.params as { uuid: string };
+    await paas.deleteApp(ws, uuid);
+    return { ok: true };
+  }),
+);
+
+app.get(
+  '/api/instances/:name/paas/databases',
+  paasRoute(async (ws) => ({ databases: await paas.listDatabases(ws) })),
+);
+app.post(
+  '/api/instances/:name/paas/databases',
+  paasRoute(async (ws, req) => {
+    const body = (req.body ?? {}) as { engine?: string; name?: string };
+    return paas.createDatabase(ws, {
+      engine: body.engine ?? '',
+      ...(body.name ? { name: body.name } : {}),
+    });
+  }),
+);
+app.post(
+  '/api/instances/:name/paas/databases/:uuid/:action',
+  paasRoute(async (ws, req) => {
+    const { uuid, action } = req.params as { uuid: string; action: string };
+    if (!['start', 'stop', 'restart'].includes(action)) {
+      throw new PaasError(400, `unknown action: ${action}`);
+    }
+    await paas.databaseAction(ws, uuid, action as 'start' | 'stop' | 'restart');
+    return { ok: true };
+  }),
+);
+app.delete(
+  '/api/instances/:name/paas/databases/:uuid',
+  paasRoute(async (ws, req) => {
+    const { uuid } = req.params as { uuid: string };
+    await paas.deleteDatabase(ws, uuid);
     return { ok: true };
   }),
 );

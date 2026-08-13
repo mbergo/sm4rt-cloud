@@ -148,6 +148,7 @@ import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/lo
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
 import MarketplacePage, { MarketplaceAppPage } from './Marketplace';
+import PaasPage from './Paas';
 import { listApps as listMarketplaceApps, type MarketplaceApp as MarketplaceAppInfo } from '../lib/marketplace';
 
 type SectionId =
@@ -168,6 +169,7 @@ type SectionId =
   | 'tablestore'
   | 'broker'
   | 'functions-real'
+  | 'paas'
   | `app:${string}`;
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
@@ -201,6 +203,7 @@ const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string 
   { id: 'cdn', label: 'CDN', icon: HardDrive, group: 'Web & edge' },
   { id: 'domains', label: 'Custom domains', icon: Globe, group: 'Web & edge' },
   { id: 'devops', label: 'Sm4rt DevOps', icon: GitBranch, group: 'Platform' },
+  { id: 'paas', label: 'Deploy from Git', icon: GitBranch, group: 'Platform' },
   { id: 'marketplace', label: 'Marketplace', icon: Boxes, group: 'Platform' },
   { id: 'observability', label: 'Observability', icon: Activity, group: 'Platform' },
   { id: 'iam', label: 'IAM', icon: ShieldCheck, group: 'Security & identity' },
@@ -667,6 +670,8 @@ export default function Console({
           <DevopsPage instance={name} notify={notify} />
         ) : section === 'marketplace' ? (
           <MarketplacePage instance={name} notify={notify} />
+        ) : section === 'paas' ? (
+          <PaasPage instance={name} notify={notify} />
         ) : section === 'objectstore' ? (
           <ObjectStorePage instance={name} notify={notify} />
         ) : section === 'tablestore' ? (
