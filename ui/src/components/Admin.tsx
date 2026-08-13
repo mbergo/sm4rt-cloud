@@ -612,6 +612,8 @@ function AdminDashboard({
 }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [joinCommand, setJoinCommand] = useState<string | null>(null);
+  const [owners, setOwners] = useState<Record<string, string>>({});
+  const [userEmails, setUserEmails] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(() => {
@@ -641,6 +643,28 @@ function AdminDashboard({
     fetch('/api/admin/join-command', { headers: { authorization: auth } })
       .then(async (res) => (res.ok ? ((await res.json()) as { joinCommand: string | null }) : null))
       .then((data) => setJoinCommand(data?.joinCommand ?? null))
+      .catch(() => undefined);
+    fetch('/api/admin/owners', { headers: { authorization: auth } })
+      .then(async (res) =>
+        res.ok
+          ? ((await res.json()) as { owners: Array<{ workspace: string; clerkId: string }> })
+          : null,
+      )
+      .then((data) =>
+        setOwners(Object.fromEntries((data?.owners ?? []).map((o) => [o.workspace, o.clerkId]))),
+      )
+      .catch(() => undefined);
+    fetch('/api/admin/users', { headers: { authorization: auth } })
+      .then(async (res) =>
+        res.ok
+          ? ((await res.json()) as { users: Array<{ clerkId: string; email: string | null }> })
+          : null,
+      )
+      .then((data) =>
+        setUserEmails(
+          Object.fromEntries((data?.users ?? []).map((u) => [u.clerkId, u.email ?? u.clerkId])),
+        ),
+      )
       .catch(() => undefined);
   }, [auth]);
 
@@ -820,6 +844,7 @@ function AdminDashboard({
                   <thead className="bg-white/[0.04] text-left text-xs uppercase tracking-wider text-stone-500">
                     <tr>
                       <th className="px-4 py-3">Name</th>
+                      <th className="px-4 py-3">Owner</th>
                       <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3">Endpoint</th>
                       <th className="px-4 py-3">Created</th>
@@ -829,7 +854,7 @@ function AdminDashboard({
                   <tbody className="divide-y divide-white/5">
                     {overview.instances.length === 0 ? (
                       <tr className="bg-white/[0.02]">
-                        <td className="px-4 py-6 text-center text-stone-500" colSpan={5}>
+                        <td className="px-4 py-6 text-center text-stone-500" colSpan={6}>
                           No workspaces yet.
                         </td>
                       </tr>
@@ -837,6 +862,11 @@ function AdminDashboard({
                       overview.instances.map((instance) => (
                         <tr key={instance.name} className="bg-white/[0.02]">
                           <td className="px-4 py-3 font-mono text-xs">{instance.name}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-stone-400">
+                            {owners[instance.name]
+                              ? (userEmails[owners[instance.name]] ?? owners[instance.name]).slice(0, 28)
+                              : '—'}
+                          </td>
                           <td className="px-4 py-3">
                             <span
                               className={

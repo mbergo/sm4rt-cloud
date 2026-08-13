@@ -136,6 +136,27 @@ function isAdminAuthorized(header: string): boolean {
   return decoded.slice(0, idx) === ADMIN_USER && decoded.slice(idx + 1) === ADMIN_PASS;
 }
 
+// — multi-tenancy: identity + workspace ownership —
+// god  = legacy token / open mode: sees everything (CI, smoke, ops)
+// user = a Clerk identity: sees only the workspaces it owns
+type Tenant = { kind: 'god' } | { kind: 'user'; clerkId: string };
+const MAX_INSTANCES_PER_TENANT = Number(process.env.MAX_INSTANCES_PER_TENANT ?? 10);
+const INSTANCE_URL_RE = /^\/api\/instances\/([^/?]+)/;
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    tenant?: Tenant;
+  }
+}
+
+/** true when the tenant may touch this workspace; non-owners get 404 upstream */
+function canAccess(tenant: Tenant | undefined, workspace: string): boolean {
+  if (!tenant || tenant.kind === 'god') return true;
+  const owner = store.getOwner(workspace);
+  // unowned workspaces stay god/admin-only once ownership is live
+  return owner !== null && owner === tenant.clerkId;
+}
+
 app.addHook('onRequest', async (request, reply) => {
   if (request.url.startsWith('/api/admin/')) {
     if (!isAdminAuthorized(request.headers.authorization ?? '')) {
@@ -148,6 +169,7 @@ app.addHook('onRequest', async (request, reply) => {
     request.url.startsWith('/api/public/') ||
     (!TOKEN && !CLERK_SECRET_KEY)
   ) {
+    request.tenant = { kind: 'god' };
     return;
   }
   const header = request.headers.authorization ?? '';
@@ -160,6 +182,7 @@ app.addHook('onRequest', async (request, reply) => {
     }
   }
   if (TOKEN && bearer === TOKEN) {
+    request.tenant = { kind: 'god' };
     return;
   }
   if (CLERK_SECRET_KEY && bearer) {
@@ -173,6 +196,16 @@ app.addHook('onRequest', async (request, reply) => {
         store.upsertUser(payload.sub, email).catch((err) => {
           request.log.debug({ err }, 'user upsert failed');
         });
+        request.tenant = { kind: 'user', clerkId: payload.sub };
+        // central ownership gate: every /api/instances/:name/* route
+        const m = INSTANCE_URL_RE.exec(request.url);
+        if (m) {
+          const ws = decodeURIComponent(m[1]);
+          if (!canAccess(request.tenant, ws)) {
+            // 404, not 403 — never leak that the workspace exists
+            reply.code(404).send({ error: 'instance not found' });
+          }
+        }
       }
       return;
     } catch (err) {
@@ -446,6 +479,31 @@ app.delete('/api/admin/ebpf', async (_request, reply) => {
   return { nodes: await driver.ebpfFanout('remove', '') };
 });
 
+// — multi-tenancy admin: users + workspace ownership (migration & repair) —
+
+app.get('/api/admin/users', async () => ({
+  users: store.listUsers().map((u) => ({
+    clerkId: u.clerkId,
+    email: u.email,
+    createdAt: u.createdAt,
+    workspaces: store.workspacesOf(u.clerkId),
+  })),
+}));
+
+app.get('/api/admin/owners', async () => ({ owners: store.listOwners() }));
+
+app.post('/api/admin/instances/:ws/owner', async (request, reply) => {
+  const { ws } = request.params as { ws: string };
+  const { clerkId } = (request.body ?? {}) as { clerkId?: string };
+  if (!clerkId || !clerkId.startsWith('user_')) {
+    return reply.code(400).send({ error: 'clerkId (user_…) is required' });
+  }
+  const instance = await provisioner.get(ws);
+  if (!instance) return reply.code(404).send({ error: 'instance not found' });
+  await store.setOwner(ws, clerkId);
+  return { workspace: ws, clerkId };
+});
+
 // Aggregate node capacity; usage is only meaningful when every node reports it,
 // otherwise a partial sum would render as a complete (and misleadingly low) value.
 function aggregateCapacity(nodes: Awaited<ReturnType<typeof provisioner.nodes>>) {
@@ -473,7 +531,15 @@ app.get('/api/cluster', async () => {
   };
 });
 
-app.get('/api/instances', async () => ({ instances: await provisioner.list() }));
+app.get('/api/instances', async (request) => {
+  const instances = await provisioner.list();
+  const tenant = request.tenant;
+  if (!tenant || tenant.kind === 'god') {
+    return { instances };
+  }
+  const mine = new Set(store.workspacesOf(tenant.clerkId));
+  return { instances: instances.filter((i) => mine.has(i.name)) };
+});
 
 interface CreateBody {
   name?: unknown;
@@ -488,6 +554,15 @@ app.post('/api/instances', async (request, reply) => {
     return reply.code(429).send({
       error: `instance limit reached (${MAX_INSTANCES}) — delete an instance first`,
     });
+  }
+  const tenant = request.tenant;
+  if (tenant?.kind === 'user') {
+    const owned = store.workspacesOf(tenant.clerkId);
+    if (owned.length >= MAX_INSTANCES_PER_TENANT) {
+      return reply.code(429).send({
+        error: `workspace limit reached (${MAX_INSTANCES_PER_TENANT}) — delete one first`,
+      });
+    }
   }
 
   let name: string;
@@ -515,6 +590,11 @@ app.post('/api/instances', async (request, reply) => {
 
   try {
     const instance = await provisioner.create(name, ttlHours);
+    if (tenant?.kind === 'user') {
+      await store.setOwner(name, tenant.clerkId).catch((err) => {
+        request.log.warn({ err, ws: name }, 'ownership record failed');
+      });
+    }
     void monitorProvision(name);
     return reply.code(201).send(instance);
   } catch (err) {
@@ -607,6 +687,7 @@ app.delete('/api/instances/:name', async (request, reply) => {
   if (!deleted) {
     return reply.code(404).send({ error: 'instance not found' });
   }
+  await store.deleteOwner(name).catch(() => {});
   if (computeEnabled) {
     // best-effort cleanup of sm4rt compute workloads owned by this workspace
     await devops.disable(name).catch(() => {});

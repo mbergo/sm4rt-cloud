@@ -34,14 +34,29 @@ export interface CoolifyServerRow {
   createdAt: string;
 }
 
+export interface WorkspaceOwnerRow {
+  workspace: string;
+  clerkId: string;
+  createdAt: string;
+}
+
 interface Snapshot {
   users: UserRow[];
   domains: DomainRow[];
   workspaceSettings: Record<string, { defaultDomain: string | null }>;
   coolifyServers: CoolifyServerRow[];
+  workspaceOwners: WorkspaceOwnerRow[];
+  rootDomains: Record<string, string>; // clerkId -> verified root domain
 }
 
-const EMPTY: Snapshot = { users: [], domains: [], workspaceSettings: {}, coolifyServers: [] };
+const EMPTY: Snapshot = {
+  users: [],
+  domains: [],
+  workspaceSettings: {},
+  coolifyServers: [],
+  workspaceOwners: [],
+  rootDomains: {},
+};
 
 export class Store {
   readonly backend: 'postgres' | 'file';
@@ -92,6 +107,12 @@ export class Store {
           token text NOT NULL,
           created_at timestamptz NOT NULL DEFAULT now()
         );
+        CREATE TABLE IF NOT EXISTS workspace_owners (
+          workspace text PRIMARY KEY,
+          clerk_id text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS root_domain text;
       `);
       await this.reloadFromPg();
       return;
@@ -109,13 +130,14 @@ export class Store {
 
   private async reloadFromPg(): Promise<void> {
     if (!this.pool) return;
-    const [users, domains, settings, coolify] = await Promise.all([
-      this.pool.query('SELECT clerk_id, email, created_at FROM users'),
+    const [users, domains, settings, coolify, owners] = await Promise.all([
+      this.pool.query('SELECT clerk_id, email, root_domain, created_at FROM users'),
       this.pool.query(
         'SELECT domain, workspace, verify_token, status, created_at, verified_at FROM domains',
       ),
       this.pool.query('SELECT workspace, default_domain FROM workspace_settings'),
       this.pool.query('SELECT id, label, url, token, created_at FROM coolify_servers'),
+      this.pool.query('SELECT workspace, clerk_id, created_at FROM workspace_owners'),
     ]);
     this.cache = {
       users: users.rows.map((r) => ({
@@ -141,6 +163,14 @@ export class Store {
         token: r.token,
         createdAt: new Date(r.created_at).toISOString(),
       })),
+      workspaceOwners: owners.rows.map((r) => ({
+        workspace: r.workspace,
+        clerkId: r.clerk_id,
+        createdAt: new Date(r.created_at).toISOString(),
+      })),
+      rootDomains: Object.fromEntries(
+        users.rows.filter((r) => r.root_domain).map((r) => [r.clerk_id, r.root_domain]),
+      ),
     };
   }
 
@@ -333,5 +363,79 @@ export class Store {
       this.persistFile();
     }
     return true;
+  }
+
+  // — workspace ownership (multi-tenancy; reads are hot-path synchronous) —
+
+  getOwner(workspace: string): string | null {
+    return this.cache.workspaceOwners.find((o) => o.workspace === workspace)?.clerkId ?? null;
+  }
+
+  workspacesOf(clerkId: string): string[] {
+    return this.cache.workspaceOwners
+      .filter((o) => o.clerkId === clerkId)
+      .map((o) => o.workspace);
+  }
+
+  listOwners(): WorkspaceOwnerRow[] {
+    return this.cache.workspaceOwners.map((o) => ({ ...o }));
+  }
+
+  async setOwner(workspace: string, clerkId: string): Promise<void> {
+    const existing = this.cache.workspaceOwners.find((o) => o.workspace === workspace);
+    if (existing) {
+      existing.clerkId = clerkId;
+    } else {
+      this.cache.workspaceOwners.push({
+        workspace,
+        clerkId,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    if (this.pool) {
+      await this.pool.query(
+        `INSERT INTO workspace_owners (workspace, clerk_id) VALUES ($1, $2)
+         ON CONFLICT (workspace) DO UPDATE SET clerk_id = EXCLUDED.clerk_id`,
+        [workspace, clerkId],
+      );
+    } else {
+      this.persistFile();
+    }
+  }
+
+  async deleteOwner(workspace: string): Promise<void> {
+    const idx = this.cache.workspaceOwners.findIndex((o) => o.workspace === workspace);
+    if (idx >= 0) this.cache.workspaceOwners.splice(idx, 1);
+    if (this.pool) {
+      await this.pool.query('DELETE FROM workspace_owners WHERE workspace = $1', [workspace]);
+    } else {
+      this.persistFile();
+    }
+  }
+
+  // — tenant root domain (workspaces inherit <ws>.<root>) —
+
+  getRootDomain(clerkId: string): string | null {
+    return this.cache.rootDomains[clerkId] ?? null;
+  }
+
+  async setRootDomain(clerkId: string, domain: string | null): Promise<void> {
+    if (domain) {
+      this.cache.rootDomains[clerkId] = domain;
+    } else {
+      delete this.cache.rootDomains[clerkId];
+    }
+    if (this.pool) {
+      await this.pool.query('UPDATE users SET root_domain = $2 WHERE clerk_id = $1', [
+        clerkId,
+        domain,
+      ]);
+    } else {
+      this.persistFile();
+    }
+  }
+
+  listUsers(): UserRow[] {
+    return this.cache.users.map((u) => ({ ...u }));
   }
 }
