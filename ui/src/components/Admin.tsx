@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Activity,
   Cloud,
   Copy,
   Cpu,
@@ -498,6 +499,110 @@ function PlansSection({ auth }: { auth: string }) {
   );
 }
 
+// Node-level eBPF (Grafana Beyla) — one privileged agent per node via the exec relay.
+function EbpfSection({ auth }: { auth: string }) {
+  const [nodes, setNodes] = useState<Array<{ node: string; state: string; error?: string }> | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    fetch('/api/admin/ebpf', { headers: { authorization: auth } })
+      .then(async (res) => (res.ok ? ((await res.json()) as { nodes: typeof nodes }) : null))
+      .then((data) => setNodes(data?.nodes ?? []))
+      .catch(() => setNodes([]));
+  }, [auth]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const act = async (method: 'POST' | 'DELETE') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/ebpf', {
+        method,
+        headers: { authorization: auth, 'content-type': 'application/json' },
+        ...(method === 'POST' ? { body: '{}' } : {}),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string; nodes?: typeof nodes } | null;
+      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      setNodes(body?.nodes ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ebpf action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const running = nodes?.filter((n) => n.state === 'running' || n.state === 'starting').length ?? 0;
+  const total = nodes?.length ?? 0;
+  const enabled = running > 0;
+
+  return (
+    <section>
+      <h2 className="mb-3 flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
+        <Activity className="h-4 w-4" /> Kernel observability (eBPF)
+      </h2>
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+        <div className="flex flex-wrap items-center gap-4">
+          <p className="text-sm text-stone-400">
+            Grafana Beyla on every node — RED metrics for all HTTP/gRPC traffic with zero
+            instrumentation, exported to a workspace Grafana via OTLP.
+          </p>
+          <div className="ml-auto flex items-center gap-2">
+            {enabled ? (
+              <button
+                type="button"
+                onClick={() => act('DELETE')}
+                disabled={busy}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Disable on all nodes
+              </button>
+            ) : (
+              <PrimaryButton onClick={() => act('POST')} disabled={busy}>
+                <Plus className="h-4 w-4" /> {busy ? 'Deploying…' : 'Enable on all nodes'}
+              </PrimaryButton>
+            )}
+          </div>
+        </div>
+        {error ? <p className="mt-2 text-xs text-rose-400">{error}</p> : null}
+        {nodes === null ? (
+          <div className="mt-3 h-10 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+        ) : total === 0 ? (
+          <p className="mt-3 text-xs text-stone-500">No exec agents reachable.</p>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {nodes.map((n) => (
+              <span
+                key={n.node}
+                title={n.error ?? undefined}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[11px] text-stone-300"
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    n.state === 'running'
+                      ? 'bg-emerald-400'
+                      : n.state === 'starting'
+                        ? 'bg-amber-400 animate-pulse'
+                        : n.state === 'absent'
+                          ? 'bg-stone-500'
+                          : 'bg-rose-400'
+                  }`}
+                />
+                {n.node} · {n.state}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function AdminDashboard({
   auth,
   onUnauthorized,
@@ -699,6 +804,8 @@ function AdminDashboard({
             ) : null}
 
             <AzureProvisionSection auth={auth} />
+
+            <EbpfSection auth={auth} />
 
             <CoolifySection auth={auth} />
 

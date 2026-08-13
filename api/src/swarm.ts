@@ -1250,6 +1250,53 @@ export class SwarmDriver implements CloudDriver {
       .sort((a, b) => a.hostname.localeCompare(b.hostname));
   }
 
+  /**
+   * Node-level eBPF (Grafana Beyla): fan the action out to the exec agent on
+   * every node — each agent runs/removes a privileged pid=host container that
+   * swarm services cannot express. Returns one row per reachable agent.
+   */
+  async ebpfFanout(
+    action: 'ensure' | 'remove' | 'status',
+    otlpEndpoint: string,
+  ): Promise<Array<{ node: string; state: string; error?: string }>> {
+    const tasks = (await this.docker.listTasks({
+      filters: JSON.stringify({ service: [EXEC_AGENT_SERVICE], 'desired-state': ['running'] }),
+    })) as Array<Record<string, any>>;
+    const token = process.env.FLOCI_CLOUD_TOKEN ?? '';
+    const nodes = new Map<string, string>(); // nodeId -> agent ip
+    for (const t of tasks) {
+      const nodeId = String(t.NodeID ?? '');
+      if (!nodeId || nodes.has(nodeId)) continue;
+      const ip = agentTaskAddress(tasks, nodeId, NETWORK_NAME);
+      if (ip) nodes.set(nodeId, ip);
+    }
+    const results = await Promise.all(
+      [...nodes.entries()].map(async ([nodeId, ip]) => {
+        try {
+          const res = await fetch(`http://${ip}:${EXEC_AGENT_PORT}/agent/ebpf`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+            body: JSON.stringify({ action, otlpEndpoint, network: NETWORK_NAME }),
+            signal: AbortSignal.timeout(120_000),
+          });
+          const data = (await res.json()) as { node?: string; state?: string; error?: string };
+          return {
+            node: data.node || nodeId.slice(0, 8),
+            state: data.state ?? 'unknown',
+            ...(data.error ? { error: data.error } : {}),
+          };
+        } catch (err) {
+          return {
+            node: nodeId.slice(0, 8),
+            state: 'unreachable',
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }),
+    );
+    return results.sort((a, b) => a.node.localeCompare(b.node));
+  }
+
   async joinCommand(): Promise<string | null> {
     const swarm = (await this.docker.swarmInspect()) as Record<string, any>;
     const token = swarm.JoinTokens?.Worker;

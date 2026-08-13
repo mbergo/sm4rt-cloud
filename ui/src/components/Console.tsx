@@ -147,7 +147,8 @@ import { computeSummary, computeDiscovery, getObservability, type DiscoveredServ
 import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
-import MarketplacePage from './Marketplace';
+import MarketplacePage, { MarketplaceAppPage } from './Marketplace';
+import { listApps as listMarketplaceApps, type MarketplaceApp as MarketplaceAppInfo } from '../lib/marketplace';
 
 type SectionId =
   | 'overview'
@@ -166,7 +167,8 @@ type SectionId =
   | 'objectstore'
   | 'tablestore'
   | 'broker'
-  | 'functions-real';
+  | 'functions-real'
+  | `app:${string}`;
 
 const NAV: { id: SectionId; label: string; icon: typeof Archive; group?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -224,6 +226,7 @@ const GROUP_ICON_COLOR: Record<string, string> = {
   'Security & identity': 'text-rose-400',
   Automation: 'text-orange-400',
   'All services': 'text-cyan-400',
+  'Deployed by user': 'text-lime-400',
   Diagnostics: 'text-stone-400',
 };
 
@@ -237,6 +240,7 @@ const GROUP_TITLE_COLOR: Record<string, string> = {
   'Security & identity': 'text-rose-500/80',
   Automation: 'text-orange-500/80',
   'All services': 'text-cyan-500/80',
+  'Deployed by user': 'text-lime-500/80',
   Diagnostics: 'text-stone-500',
 };
 
@@ -464,6 +468,7 @@ export default function Console({
   const [section, setSection] = useState<SectionId>('overview');
   const [region, setRegion] = useState<Region>('us-east-1');
   const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
+  const [userApps, setUserApps] = useState<MarketplaceAppInfo[]>([]);
 
   const logApi = useMemo<LogConsoleApi>(
     () => ({
@@ -497,6 +502,26 @@ export default function Console({
     };
   }, [name]);
 
+  // Marketplace apps deployed by the user become first-class sidebar entries.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listMarketplaceApps(name)
+        .then((data) => {
+          if (!cancelled) setUserApps(data.apps);
+        })
+        .catch(() => {
+          if (!cancelled) setUserApps([]);
+        });
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [name]);
+
   const groups: { title: string | null; items: typeof NAV }[] = [];
   for (const item of NAV) {
     const title = item.group ?? null;
@@ -506,6 +531,21 @@ export default function Console({
     } else {
       groups.push({ title, items: [item] });
     }
+  }
+  if (userApps.length > 0) {
+    // Right after Platform (where Marketplace lives), before Security.
+    const idx = groups.findIndex((g) => g.title === 'Security & identity');
+    const group = {
+      title: 'Deployed by user',
+      items: userApps.map((app) => ({
+        id: `app:${app.uuid}` as SectionId,
+        label: app.name,
+        icon: Boxes,
+        group: 'Deployed by user',
+      })),
+    };
+    if (idx >= 0) groups.splice(idx, 0, group);
+    else groups.push(group);
   }
 
   return (
@@ -635,6 +675,13 @@ export default function Console({
           <BrokerPage instance={name} notify={notify} />
         ) : section === 'functions-real' ? (
           <FunctionsRealPage instance={name} notify={notify} />
+        ) : section.startsWith('app:') ? (
+          <MarketplaceAppPage
+            instance={name}
+            uuid={section.slice(4)}
+            notify={notify}
+            onGone={() => setSection('marketplace')}
+          />
         ) : section === 'ecr' ? (
           <RegistryPage instance={name} notify={notify} />
         ) : (

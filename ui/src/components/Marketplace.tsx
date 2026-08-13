@@ -264,3 +264,155 @@ export default function MarketplacePage({
     </div>
   );
 }
+
+/** Detail page for one user-deployed marketplace app (sidebar entry). */
+export function MarketplaceAppPage({
+  instance,
+  uuid,
+  notify,
+  onGone,
+}: {
+  instance: string;
+  uuid: string;
+  notify: (message: string, tone?: 'ok' | 'err') => void;
+  onGone: () => void;
+}) {
+  const [app, setApp] = useState<MarketplaceApp | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    listApps(instance)
+      .then((r) => {
+        const found = r.apps.find((a) => a.uuid === uuid) ?? null;
+        setApp(found);
+        if (!found) onGone();
+      })
+      .catch(() => undefined);
+  }, [instance, uuid, onGone]);
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 8000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const act = async (action: 'start' | 'stop' | 'restart') => {
+    setBusy(true);
+    try {
+      await appAction(instance, uuid, action);
+      notify(`${app?.name ?? 'app'}: ${action} requested`);
+      setTimeout(refresh, 1500);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : `${action} failed`, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete ${app?.name ?? 'this app'} and its volumes?`)) return;
+    setBusy(true);
+    try {
+      await deleteApp(instance, uuid);
+      notify(`${app?.name ?? 'app'} deletion queued`);
+      onGone();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'delete failed', 'err');
+      setBusy(false);
+    }
+  };
+
+  if (!app) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-sm text-stone-500">
+        Loading app…
+      </div>
+    );
+  }
+
+  const running = app.status.startsWith('running');
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h2 className="font-display text-lg font-bold tracking-tight">{app.name}</h2>
+            <span className={`text-xs ${statusTone(app.status)}`}>{app.status}</span>
+          </div>
+          {app.type ? (
+            <p className="mt-1 text-sm text-stone-400">
+              {titleize(app.type)} · deployed from the marketplace
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {running ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => act('restart')}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
+              >
+                <RotateCw className="h-3.5 w-3.5" /> Restart
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => act('stop')}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
+              >
+                <Square className="h-3.5 w-3.5" /> Stop
+              </button>
+            </>
+          ) : (
+            <PrimaryButton onClick={() => act('start')} disabled={busy}>
+              <Play className="h-3.5 w-3.5" /> Start
+            </PrimaryButton>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={remove}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-400 transition hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
+            aria-label="Delete app"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {app.domains.length > 0 ? (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+            Endpoints
+          </h3>
+          <div className="mt-2 space-y-2">
+            {app.domains.map((domain) => (
+              <div
+                key={domain}
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5"
+              >
+                <a
+                  href={domain}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-w-0 items-center gap-1.5 truncate font-mono text-xs text-amber-300 hover:underline"
+                >
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  {domain.replace(/^https?:\/\//, '')}
+                </a>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <p className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-xs text-stone-500">
+        Runs on the shared apps server · created{' '}
+        {app.createdAt ? new Date(app.createdAt).toLocaleString() : '—'}
+      </p>
+    </div>
+  );
+}

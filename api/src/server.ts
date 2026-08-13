@@ -393,6 +393,58 @@ app.get('/api/admin/plans', async () => ({
   ],
 }));
 
+// — node-level eBPF (Grafana Beyla on every node, via the exec agents) —
+
+type EbpfCapable = { ebpfFanout: (a: 'ensure' | 'remove' | 'status', o: string) => Promise<Array<{ node: string; state: string; error?: string }>> };
+
+function ebpfDriver(): EbpfCapable | null {
+  return provisioner.kind === 'swarm' && 'ebpfFanout' in provisioner
+    ? (provisioner as unknown as EbpfCapable)
+    : null;
+}
+
+/** OTLP sink: the obs stack of the given workspace (or the first that has one). */
+async function ebpfOtlpEndpoint(ws?: string): Promise<string | null> {
+  const list = await provisioner.list();
+  const names = ws ? [ws] : list.map((i) => i.name);
+  for (const name of names) {
+    try {
+      const obs = await compute.getObservability(name);
+      if (obs && obs.state === 'running') {
+        return `http://sm4rt-obs-${name}:4318`;
+      }
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+app.get('/api/admin/ebpf', async (_request, reply) => {
+  const driver = ebpfDriver();
+  if (!driver) return reply.code(501).send({ error: 'ebpf requires the swarm driver' });
+  return { nodes: await driver.ebpfFanout('status', '') };
+});
+
+app.post('/api/admin/ebpf', async (request, reply) => {
+  const driver = ebpfDriver();
+  if (!driver) return reply.code(501).send({ error: 'ebpf requires the swarm driver' });
+  const { workspace } = (request.body ?? {}) as { workspace?: string };
+  const otlp = await ebpfOtlpEndpoint(workspace);
+  if (!otlp) {
+    return reply.code(409).send({
+      error: 'no observability stack found — enable Observability in a workspace first',
+    });
+  }
+  return { otlpEndpoint: otlp, nodes: await driver.ebpfFanout('ensure', otlp) };
+});
+
+app.delete('/api/admin/ebpf', async (_request, reply) => {
+  const driver = ebpfDriver();
+  if (!driver) return reply.code(501).send({ error: 'ebpf requires the swarm driver' });
+  return { nodes: await driver.ebpfFanout('remove', '') };
+});
+
 // Aggregate node capacity; usage is only meaningful when every node reports it,
 // otherwise a partial sum would render as a complete (and misleadingly low) value.
 function aggregateCapacity(nodes: Awaited<ReturnType<typeof provisioner.nodes>>) {

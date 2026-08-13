@@ -102,6 +102,86 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(json);
 }
 
+// — eBPF (Grafana Beyla) lifecycle on this node —
+const EBPF_CONTAINER = 'sm4rt-ebpf-beyla';
+const EBPF_IMAGE = 'grafana/beyla:2.7';
+
+interface EbpfResult {
+  node: string;
+  state: 'running' | 'absent' | 'starting';
+  error?: string;
+}
+
+async function manageEbpf(
+  action: string,
+  opts: { otlpEndpoint: string; network: string; image: string },
+): Promise<EbpfResult> {
+  const node = process.env.HOSTNAME ?? 'unknown';
+  try {
+    const existing = docker.getContainer(EBPF_CONTAINER);
+    let state: string | null = null;
+    try {
+      const info = await existing.inspect();
+      state = info.State?.Running ? 'running' : 'stopped';
+    } catch {
+      state = null;
+    }
+    if (action === 'status') {
+      return { node, state: state === 'running' ? 'running' : 'absent' };
+    }
+    if (action === 'remove') {
+      if (state !== null) {
+        await existing.remove({ force: true });
+      }
+      return { node, state: 'absent' };
+    }
+    if (action !== 'ensure') {
+      return { node, state: 'absent', error: `unknown action: ${action}` };
+    }
+    if (state === 'running') {
+      return { node, state: 'running' };
+    }
+    if (state !== null) {
+      await existing.remove({ force: true });
+    }
+    if (!opts.otlpEndpoint) {
+      return { node, state: 'absent', error: 'otlpEndpoint required' };
+    }
+    await new Promise<void>((resolve, reject) => {
+      docker.pull(opts.image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+        if (err) return reject(err);
+        docker.modem.followProgress(stream, (err2: Error | null) => (err2 ? reject(err2) : resolve()));
+      });
+    });
+    const container = await docker.createContainer({
+      name: EBPF_CONTAINER,
+      Image: opts.image,
+      Env: [
+        'BEYLA_OPEN_PORT=1-65535',
+        'BEYLA_METRICS_FEATURES=application,network',
+        `OTEL_EXPORTER_OTLP_ENDPOINT=${opts.otlpEndpoint}`,
+        'OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf',
+        `OTEL_RESOURCE_ATTRIBUTES=node.name=${node}`,
+        'BEYLA_BPF_CONTEXT_PROPAGATION=disabled',
+      ],
+      Labels: { 'sm4rt.kind': 'ebpf-agent' },
+      HostConfig: {
+        Privileged: true,
+        PidMode: 'host',
+        RestartPolicy: { Name: 'always' },
+        NetworkMode: opts.network,
+        Mounts: [
+          { Type: 'bind', Source: '/sys/fs/cgroup', Target: '/sys/fs/cgroup', ReadOnly: true },
+        ],
+      },
+    });
+    await container.start();
+    return { node, state: 'starting' };
+  } catch (err) {
+    return { node, state: 'absent', error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/agent/health') {
@@ -129,6 +209,26 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await execLocal(containerId, cmd);
       send(res, 200, result);
+      return;
+    }
+    // — node-level eBPF (Beyla): swarm services can't run privileged/pid=host,
+    //   so each agent manages a plain local container on its own node —
+    if (req.method === 'POST' && req.url === '/agent/ebpf') {
+      const body = await readBody(req);
+      let parsed: { action?: unknown; otlpEndpoint?: unknown; network?: unknown; image?: unknown };
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        send(res, 400, { error: 'invalid JSON' });
+        return;
+      }
+      const action = typeof parsed.action === 'string' ? parsed.action : '';
+      const result = await manageEbpf(action, {
+        otlpEndpoint: typeof parsed.otlpEndpoint === 'string' ? parsed.otlpEndpoint : '',
+        network: typeof parsed.network === 'string' ? parsed.network : 'floci-net',
+        image: typeof parsed.image === 'string' && parsed.image ? parsed.image : EBPF_IMAGE,
+      });
+      send(res, result.error ? 502 : 200, result);
       return;
     }
     send(res, 404, { error: 'not found' });
