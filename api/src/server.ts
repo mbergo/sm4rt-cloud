@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { registerLenientJsonParser } from './json-body.ts';
 import { verifyToken } from '@clerk/backend';
@@ -745,11 +746,11 @@ const marketplace = new MarketplaceManager({
 });
 
 function marketplaceRoute<T>(
-  handler: (ws: string, req: Parameters<Parameters<typeof app.get>[1]>[0]) => Promise<T>,
+  handler: (ws: string, req: FastifyRequest) => Promise<T>,
 ) {
   return async (
-    req: Parameters<Parameters<typeof app.get>[1]>[0],
-    reply: Parameters<Parameters<typeof app.get>[1]>[1],
+    req: FastifyRequest,
+    reply: FastifyReply,
   ) => {
     if (!marketplace.enabled) {
       return reply.code(503).send({ error: 'marketplace is not configured on this deployment' });
@@ -818,11 +819,11 @@ const paas = new PaasManager({
 });
 
 function paasRoute<T>(
-  handler: (ws: string, req: Parameters<Parameters<typeof app.get>[1]>[0]) => Promise<T>,
+  handler: (ws: string, req: FastifyRequest) => Promise<T>,
 ) {
   return async (
-    req: Parameters<Parameters<typeof app.get>[1]>[0],
-    reply: Parameters<Parameters<typeof app.get>[1]>[1],
+    req: FastifyRequest,
+    reply: FastifyReply,
   ) => {
     if (!paas.enabled) {
       return reply.code(503).send({ error: 'paas is not configured on this deployment' });
