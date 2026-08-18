@@ -20,6 +20,9 @@ COPY api/package.json ./
 COPY api/src ./src
 COPY cli ./cli
 COPY --from=ui-build /ui/dist ./public
+# Console state (custom domains, workspace owners) lives in /app/.data when
+# DATABASE_URL is unset; the runtime user must own it or every write EACCESes.
+RUN mkdir -p /app/.data && chown node:node /app/.data
 EXPOSE 8080
 USER node
 CMD ["node", "src/server.ts"]
