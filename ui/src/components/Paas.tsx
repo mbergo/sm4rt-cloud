@@ -73,13 +73,20 @@ export default function PaasPage({
 
   const refresh = useCallback(() => {
     listPaasApps(instance)
-      .then((r) => setApps(r.apps))
+      .then((r) => {
+        setApps(r.apps);
+        // a successful call means Coolify is back; recover from the 503 state
+        setUnavailable(false);
+      })
       .catch((err) => {
         if ((err as { status?: number }).status === 503) setUnavailable(true);
         setApps([]);
       });
     listPaasDatabases(instance)
-      .then((r) => setDbs(r.databases))
+      .then((r) => {
+        setDbs(r.databases);
+        setUnavailable(false);
+      })
       .catch(() => setDbs([]));
   }, [instance]);
 
@@ -337,6 +344,7 @@ export default function PaasPage({
                         onClick={() => void removeApp(app)}
                         disabled={busy === app.uuid}
                         confirmLabel="Confirm?"
+                        ariaLabel={`Delete ${app.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </DangerButton>
@@ -437,6 +445,7 @@ export default function PaasPage({
                         onClick={() => void removeDb(db)}
                         disabled={busy === db.uuid}
                         confirmLabel="Confirm?"
+                        ariaLabel={`Delete ${db.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </DangerButton>
