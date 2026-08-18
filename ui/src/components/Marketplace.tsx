@@ -1,4 +1,4 @@
-// Marketplace page — one-click apps from the shared Coolify server.
+// Marketplace page. One-click apps from the shared Coolify server.
 // Catalog (~330 templates) + installed apps for the current workspace.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -11,7 +11,10 @@ import {
   Store,
   Trash2,
 } from 'lucide-react';
-import { PrimaryButton } from './bits';
+import { BrandLoader, CopyButton, GhostButton, PrimaryButton } from './bits';
+import { Card, CopyRow, DangerButton, EmptyState, Input, PageShell, StateDot } from './Compute';
+import { timeAgo } from '../lib/format';
+import { normalizeStatus } from '../lib/status';
 import {
   appAction,
   createApp,
@@ -21,17 +24,31 @@ import {
   type MarketplaceApp,
 } from '../lib/marketplace';
 
-function statusTone(status: string): string {
-  if (status.startsWith('running')) return 'text-emerald-400';
-  if (status.startsWith('exited') || status.startsWith('stopped')) return 'text-stone-500';
-  return 'text-amber-300';
-}
+const CATALOG_PREVIEW = 48;
 
 function titleize(id: string): string {
   return id
     .split('-')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
+}
+
+function TypePill({ type }: { type: string }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-widest text-stone-400">
+      {titleize(type)}
+    </span>
+  );
+}
+
+/** Amber chip for the health suffix; healthy is the norm, so only surface trouble. */
+function DetailChip({ detail }: { detail?: string }) {
+  if (!detail || detail === 'healthy') return null;
+  return (
+    <span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-widest text-amber-300">
+      {detail}
+    </span>
+  );
 }
 
 export default function MarketplacePage({
@@ -45,7 +62,8 @@ export default function MarketplacePage({
   const [apps, setApps] = useState<MarketplaceApp[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [query, setQuery] = useState('');
-  const [installing, setInstalling] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [installing, setInstalling] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
   const refreshApps = useCallback(() => {
@@ -76,19 +94,32 @@ export default function MarketplacePage({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const all = templates ?? [];
-    return q ? all.filter((t) => t.includes(q)) : all;
+    if (!q) return all;
+    return all.filter((t) => t.includes(q) || t.replace(/-/g, ' ').includes(q));
   }, [templates, query]);
 
+  const visible = expanded ? filtered : filtered.slice(0, CATALOG_PREVIEW);
+
+  // createApp is a plain POST per template; installs can run concurrently, so
+  // the guard is single-flight per tile only. Other tiles stay enabled.
   const install = async (type: string) => {
-    setInstalling(type);
+    if (installing.includes(type)) {
+      notify(`${titleize(type)} install already in flight`, 'err');
+      return;
+    }
+    setInstalling((cur) => [...cur, type]);
     try {
       const created = await createApp(instance, type);
-      notify(`${titleize(type)} deploying — ${created.domains[0] ?? created.uuid}`);
+      notify(
+        created.domains[0]
+          ? `${titleize(type)} deploying at ${created.domains[0]}`
+          : `${titleize(type)} deploying (${created.uuid})`,
+      );
       refreshApps();
     } catch (err) {
       notify(err instanceof Error ? err.message : 'install failed', 'err');
     } finally {
-      setInstalling(null);
+      setInstalling((cur) => cur.filter((t) => t !== type));
     }
   };
 
@@ -106,7 +137,6 @@ export default function MarketplacePage({
   };
 
   const remove = async (app: MarketplaceApp) => {
-    if (!window.confirm(`Delete ${app.name} and its volumes?`)) return;
     setBusy(app.uuid);
     try {
       await deleteApp(instance, app.uuid);
@@ -121,147 +151,168 @@ export default function MarketplacePage({
 
   if (unavailable) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center">
-        <Store className="mx-auto h-8 w-8 text-stone-500" />
-        <p className="mt-3 text-sm text-stone-400">
-          Marketplace is not configured on this deployment.
-        </p>
-      </div>
+      <PageShell icon={Store} title="Marketplace" subtitle="One-click apps on the shared apps server">
+        <Card>
+          <EmptyState text="Marketplace is not configured on this deployment." />
+        </Card>
+      </PageShell>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <section>
-        <h2 className="mb-3 font-display text-sm font-bold uppercase tracking-wider text-stone-400">
-          Installed apps ({apps?.length ?? '…'})
-        </h2>
+    <PageShell
+      icon={Store}
+      title="Marketplace"
+      subtitle="One-click apps with automatic TLS on the shared apps server"
+      onRefresh={refreshApps}
+    >
+      <section className="space-y-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-widest text-stone-500">
+          Installed apps{apps ? ` (${apps.length})` : ''}
+        </h3>
         {apps === null ? (
-          <div className="h-20 animate-pulse rounded-2xl border border-white/5 bg-white/[0.03]" />
+          <div className="flex justify-center py-6">
+            <BrandLoader size="sm" label="Loading apps" />
+          </div>
         ) : apps.length === 0 ? (
-          <p className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-sm text-stone-500">
-            Nothing installed yet — pick an app from the catalog below.
-          </p>
+          <Card>
+            <EmptyState text="Nothing installed yet. Pick an app from the catalog below." />
+          </Card>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {apps.map((app) => (
-              <div key={app.uuid} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 truncate font-mono text-sm text-stone-100">
-                    {app.name}
-                  </span>
-                  <span className={`ml-auto text-xs ${statusTone(app.status)}`}>{app.status}</span>
-                </div>
-                {app.type ? (
-                  <p className="mt-1 text-xs text-stone-500">{titleize(app.type)}</p>
-                ) : null}
-                {app.domains[0] ? (
-                  <a
-                    href={app.domains[0]}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 flex items-center gap-1.5 truncate font-mono text-xs text-amber-300 hover:underline"
-                  >
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                    {app.domains[0].replace(/^https?:\/\//, '')}
-                  </a>
-                ) : null}
-                <div className="mt-3 flex gap-2">
-                  {app.status.startsWith('running') ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={busy === app.uuid}
-                        onClick={() => act(app, 'restart')}
-                        className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
-                      >
-                        <RotateCw className="h-3 w-3" /> Restart
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy === app.uuid}
-                        onClick={() => act(app, 'stop')}
-                        className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
-                      >
-                        <Square className="h-3 w-3" /> Stop
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={busy === app.uuid}
-                      onClick={() => act(app, 'start')}
-                      className="inline-flex h-7 items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 text-xs text-emerald-300 transition hover:bg-white/10 disabled:opacity-50"
+            {apps.map((app) => {
+              const st = normalizeStatus(app.status);
+              return (
+                <Card key={app.uuid} className="p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StateDot state={st.label} />
+                    <DetailChip detail={st.detail} />
+                    {app.type ? (
+                      <span className="ml-auto">
+                        <TypePill type={app.type} />
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 truncate font-mono text-sm text-stone-100">{app.name}</p>
+                  {app.domains[0] ? (
+                    <a
+                      href={app.domains[0]}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1.5 flex items-center gap-1.5 truncate font-mono text-xs text-amber-300 hover:underline"
                     >
-                      <Play className="h-3 w-3" /> Start
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={busy === app.uuid}
-                    onClick={() => remove(app)}
-                    className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-400 transition hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
-                    aria-label="Delete"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
-            ))}
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                      {app.domains[0].replace(/^https?:\/\//, '')}
+                    </a>
+                  ) : null}
+                  <div className="mt-3 flex items-center gap-1.5">
+                    {st.state === 'running' ? (
+                      <>
+                        <GhostButton
+                          onClick={() => void act(app, 'restart')}
+                          disabled={busy === app.uuid}
+                          className="!px-2.5 !py-1 !text-xs"
+                        >
+                          <RotateCw className="h-3 w-3" /> Restart
+                        </GhostButton>
+                        <GhostButton
+                          onClick={() => void act(app, 'stop')}
+                          disabled={busy === app.uuid}
+                          className="!px-2.5 !py-1 !text-xs"
+                        >
+                          <Square className="h-3 w-3" /> Stop
+                        </GhostButton>
+                      </>
+                    ) : (
+                      <GhostButton
+                        onClick={() => void act(app, 'start')}
+                        disabled={busy === app.uuid}
+                        className="!px-2.5 !py-1 !text-xs !text-emerald-300"
+                      >
+                        <Play className="h-3 w-3" /> Start
+                      </GhostButton>
+                    )}
+                    <span className="ml-auto">
+                      <DangerButton
+                        onClick={() => void remove(app)}
+                        disabled={busy === app.uuid}
+                        confirmLabel="Confirm?"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </DangerButton>
+                    </span>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </section>
 
-      <section>
-        <div className="mb-3 flex items-center gap-3">
-          <h2 className="font-display text-sm font-bold uppercase tracking-wider text-stone-400">
-            Catalog {templates ? `(${filtered.length}/${templates.length})` : ''}
-          </h2>
-          <div className="relative ml-auto">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
-            <input
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="text-[11px] font-semibold uppercase tracking-widest text-stone-500">
+            Catalog
+          </h3>
+          {templates !== null ? (
+            <span className="text-[11px] text-stone-500">
+              {filtered.length} of {templates.length}
+            </span>
+          ) : null}
+          <div className="relative ml-auto w-64">
+            <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
+            <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search apps…"
-              className="w-64 rounded-lg border border-white/10 bg-stone-900 py-2 pl-9 pr-3 text-sm text-stone-100 outline-none focus:border-amber-400/50"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setExpanded(false);
+              }}
+              placeholder="Search apps"
+              className="pl-9"
             />
           </div>
         </div>
         {templates === null ? (
-          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-16 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
-            ))}
+          <div className="flex justify-center py-6">
+            <BrandLoader size="sm" label="Loading catalog" />
           </div>
+        ) : filtered.length === 0 ? (
+          <Card>
+            <EmptyState text={`No template matches "${query}".`} />
+          </Card>
         ) : (
-          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-            {filtered.map((type) => (
-              <div
-                key={type}
-                className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-stone-100">{titleize(type)}</p>
-                  <p className="truncate font-mono text-[10px] text-stone-500">{type}</p>
-                </div>
-                <PrimaryButton onClick={() => install(type)} disabled={installing !== null}>
-                  {installing === type ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    'Install'
-                  )}
-                </PrimaryButton>
+          <>
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+              {visible.map((type) => {
+                const tileBusy = installing.includes(type);
+                return (
+                  <Card key={type} className="flex items-center gap-3 p-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-stone-100">{titleize(type)}</p>
+                      <p className="truncate font-mono text-[10px] text-stone-500">{type}</p>
+                    </div>
+                    <PrimaryButton
+                      onClick={() => void install(type)}
+                      disabled={tileBusy}
+                      className="!px-3 !py-1.5 !text-xs"
+                    >
+                      {tileBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Install'}
+                    </PrimaryButton>
+                  </Card>
+                );
+              })}
+            </div>
+            {!expanded && filtered.length > CATALOG_PREVIEW ? (
+              <div className="flex justify-center">
+                <GhostButton onClick={() => setExpanded(true)}>
+                  Show all {filtered.length}
+                </GhostButton>
               </div>
-            ))}
-            {filtered.length === 0 ? (
-              <p className="col-span-full py-6 text-center text-sm text-stone-500">
-                No template matches “{query}”.
-              </p>
             ) : null}
-          </div>
+          </>
         )}
       </section>
-    </div>
+    </PageShell>
   );
 }
 
@@ -310,7 +361,6 @@ export function MarketplaceAppPage({
   };
 
   const remove = async () => {
-    if (!window.confirm(`Delete ${app?.name ?? 'this app'} and its volumes?`)) return;
     setBusy(true);
     try {
       await deleteApp(instance, uuid);
@@ -324,75 +374,61 @@ export function MarketplaceAppPage({
 
   if (!app) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-sm text-stone-500">
-        Loading app…
+      <div className="flex justify-center py-16">
+        <BrandLoader size="sm" label="Loading app" />
       </div>
     );
   }
 
-  const running = app.status.startsWith('running');
+  const st = normalizeStatus(app.status);
 
   return (
-    <div className="space-y-5">
+    <div className="mt-6 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2.5">
-            <h2 className="font-display text-lg font-bold tracking-tight">{app.name}</h2>
-            <span className={`text-xs ${statusTone(app.status)}`}>{app.status}</span>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h2 className="font-display text-lg font-bold tracking-tight text-stone-100">
+              {app.name}
+            </h2>
+            <StateDot state={st.label} />
+            <DetailChip detail={st.detail} />
+            {app.type ? <TypePill type={app.type} /> : null}
           </div>
-          {app.type ? (
-            <p className="mt-1 text-sm text-stone-400">
-              {titleize(app.type)} · deployed from the marketplace
-            </p>
-          ) : null}
+          <p className="mt-1 text-xs text-stone-500">
+            Deployed from the marketplace · created {timeAgo(app.createdAt)}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {running ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {st.state === 'running' ? (
             <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => act('restart')}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
-              >
+              <GhostButton onClick={() => void act('restart')} disabled={busy}>
                 <RotateCw className="h-3.5 w-3.5" /> Restart
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => act('stop')}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-stone-300 transition hover:bg-white/10 disabled:opacity-50"
-              >
+              </GhostButton>
+              <GhostButton onClick={() => void act('stop')} disabled={busy}>
                 <Square className="h-3.5 w-3.5" /> Stop
-              </button>
+              </GhostButton>
             </>
           ) : (
-            <PrimaryButton onClick={() => act('start')} disabled={busy}>
+            <PrimaryButton onClick={() => void act('start')} disabled={busy}>
               <Play className="h-3.5 w-3.5" /> Start
             </PrimaryButton>
           )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={remove}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-400 transition hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
-            aria-label="Delete app"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <DangerButton onClick={() => void remove()} disabled={busy} confirmLabel="Confirm delete">
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </DangerButton>
         </div>
       </div>
 
       {app.domains.length > 0 ? (
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+        <Card className="p-4">
+          <h3 className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
             Endpoints
           </h3>
           <div className="mt-2 space-y-2">
             {app.domains.map((domain) => (
               <div
                 key={domain}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5"
+                className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-3 py-2"
               >
                 <a
                   href={domain}
@@ -403,16 +439,20 @@ export function MarketplaceAppPage({
                   <ExternalLink className="h-3 w-3 shrink-0" />
                   {domain.replace(/^https?:\/\//, '')}
                 </a>
+                <CopyButton value={domain} />
               </div>
             ))}
           </div>
-        </section>
+        </Card>
       ) : null}
 
-      <p className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-xs text-stone-500">
-        Runs on the shared apps server · created{' '}
-        {app.createdAt ? new Date(app.createdAt).toLocaleString() : '—'}
-      </p>
+      <Card className="space-y-2 p-4">
+        <h3 className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+          Details
+        </h3>
+        <CopyRow label="App UUID" value={app.uuid} />
+        <p className="text-xs text-stone-500">Runs on the shared apps server.</p>
+      </Card>
     </div>
   );
 }
