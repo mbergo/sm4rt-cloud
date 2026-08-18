@@ -725,7 +725,7 @@ function InlineLogTerminal({ instance }: { instance: string }) {
       .then((data) => {
         if (!alive) return;
         setTargets(data.targets);
-        setTarget((prev: string) => prev || data.targets[0]?.serviceName || '');
+        setTarget((prev: string) => prev || data.targets[0]?.name || '');
       })
       .catch(() => undefined);
     return () => {
@@ -787,8 +787,8 @@ function InlineLogTerminal({ instance }: { instance: string }) {
           className="rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-[11px] text-stone-300 outline-none focus:border-amber-400/50"
         >
           {targets.map((t) => (
-            <option key={t.serviceName} value={t.serviceName}>
-              {t.instanceLabel ?? t.serviceName}
+            <option key={t.name} value={t.name}>
+              {t.label}
             </option>
           ))}
         </select>
@@ -2072,25 +2072,22 @@ function CatalogServiceCard({
     onAct('stop');
   };
 
+  // The open surface and the start/stop control are sibling buttons: nesting
+  // a real <button> inside a role="button" root is invalid for AT.
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(event: { key: string; preventDefault: () => void }) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-      className={`group cursor-pointer rounded-xl border bg-white/[0.03] p-4 text-left transition hover:bg-white/[0.05] ${
+      className={`group relative rounded-xl border bg-white/[0.03] transition hover:bg-white/[0.05] ${
         running
           ? 'border-amber-400/20 hover:border-amber-400/40'
           : 'border-white/10 hover:border-amber-500/30'
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block w-full cursor-pointer rounded-xl p-4 text-left"
+      >
+        <div className={`flex min-w-0 items-center gap-2.5 ${onAct && service ? 'pr-9' : ''}`}>
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-300 transition group-hover:border-amber-500/30 group-hover:text-amber-200">
             <Icon className="h-4.5 w-4.5" />
           </span>
@@ -2103,48 +2100,47 @@ function CatalogServiceCard({
             <p className="truncate font-mono text-[10px] text-stone-500">{subtitle}</p>
           </div>
         </div>
-        {onAct && service ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={(event: { stopPropagation: () => void }) => {
-              event.stopPropagation();
-              act();
-            }}
-            className={`inline-flex h-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
-              canStart
-                ? 'w-7 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                : armed
-                  ? 'border-rose-500/40 bg-rose-500/15 px-2 text-[10px] font-semibold text-rose-200'
-                  : 'w-7 border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
-            }`}
-            aria-label={canStart ? `Start ${title}` : `Stop ${title}`}
-          >
-            {busy ? (
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-            ) : canStart ? (
-              <Play className="h-3.5 w-3.5" />
-            ) : armed ? (
-              'Sure?'
-            ) : (
-              <Square className="h-3.5 w-3.5" />
-            )}
-          </button>
-        ) : null}
-      </div>
-      {firstEndpoint ? (
-        <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate rounded-md border border-white/10 bg-black/30 px-2 py-0.5 font-mono text-[10px] text-amber-200/80">
-            {firstEndpoint}
-          </span>
-          {replicas > 1 ? (
-            <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-stone-400">
-              ×{replicas}
+        {firstEndpoint ? (
+          <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate rounded-md border border-white/10 bg-black/30 px-2 py-0.5 font-mono text-[10px] text-amber-200/80">
+              {firstEndpoint}
             </span>
-          ) : null}
-        </div>
+            {replicas > 1 ? (
+              <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-stone-400">
+                ×{replicas}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">{description}</p>
+      </button>
+      {onAct && service ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => act()}
+          aria-label={
+            canStart ? `Start ${title}` : armed ? `Confirm stop ${title}` : `Stop ${title}`
+          }
+          className={`absolute right-4 top-4 inline-flex h-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
+            canStart
+              ? 'w-7 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+              : armed
+                ? 'border-rose-500/40 bg-rose-500/15 px-2 text-[10px] font-semibold text-rose-200'
+                : 'w-7 border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
+          }`}
+        >
+          {busy ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          ) : canStart ? (
+            <Play className="h-3.5 w-3.5" />
+          ) : armed ? (
+            'Sure?'
+          ) : (
+            <Square className="h-3.5 w-3.5" />
+          )}
+        </button>
       ) : null}
-      <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">{description}</p>
     </div>
   );
 }
@@ -2636,6 +2632,20 @@ function buildConnectSnippet(
   }
   const first = endpoints[0].value;
   const plain = endpoints.find((e) => !e.value.startsWith('https://'))?.value ?? first;
+  // host[:port] for CLIs that reject URLs: parse real URLs, strip any
+  // path/query, and fall back to the raw value when parsing fails.
+  const hostPort = (value: string): string => {
+    if (/^[a-z0-9+.-]+:\/\//i.test(value)) {
+      try {
+        const url = new URL(value);
+        if (url.host) return url.host;
+      } catch {
+        // unparseable; fall through to the regex strip below
+      }
+      return value.replace(/^[a-z0-9+.-]+:\/\//i, '').replace(/[/?#].*$/, '');
+    }
+    return value.replace(/[/?#].*$/, '');
+  };
   switch (service) {
     case 'kafka':
       return [
@@ -2643,28 +2653,48 @@ function buildConnectSnippet(
         `kafka-console-consumer --bootstrap-server ${plain} --topic demo --from-beginning`,
       ].join('\n');
     case 'cassandra': {
-      const hostPort = plain.replace(/^[a-z0-9+.-]+:\/\//i, '');
-      const colon = hostPort.lastIndexOf(':');
-      const host = colon > 0 ? hostPort.slice(0, colon) : hostPort;
-      const port = colon > 0 ? hostPort.slice(colon + 1) : '';
+      const target = hostPort(plain);
+      const colon = target.lastIndexOf(':');
+      const host = colon > 0 ? target.slice(0, colon) : target;
+      const port = colon > 0 ? target.slice(colon + 1) : '';
       return `cqlsh ${host}${port ? ` ${port}` : ''}`;
     }
     case 'couchdb':
       return `curl ${first}`;
-    case 'solr':
-      return `curl "${first}/solr/admin/cores?action=STATUS"`;
-    case 'activemq':
-      return ['# point any AMQP 1.0 client at the broker', `export AMQP_URL=${plain}`].join('\n');
+    case 'solr': {
+      // the endpoint may or may not already include the /solr context path
+      const base = first.replace(/\/+$/, '');
+      return base.endsWith('/solr')
+        ? `curl "${base}/admin/cores?action=STATUS"`
+        : `curl "${base}/solr/admin/cores?action=STATUS"`;
+    }
+    case 'activemq': {
+      const amqp =
+        endpoints.find((e) => /amqp|openwire/i.test(`${e.label} ${e.value}`))?.value ?? plain;
+      return ['# point any AMQP 1.0 client at the broker', `export AMQP_URL=${amqp}`].join('\n');
+    }
     case 'zookeeper':
-      return `zkCli.sh -server ${plain}`;
+      return `zkCli.sh -server ${hostPort(plain)}`;
     case 'trino':
       return `trino --server ${first} --execute "SHOW CATALOGS"`;
     case 'ollama':
       return `curl ${first}/api/generate -d '{"model":"<model>","prompt":"hello"}'`;
-    case 'spark':
-      return `spark-submit --master ${plain} app.py`;
-    case 'flink':
-      return `flink run -m ${plain} job.jar`;
+    case 'spark': {
+      const master =
+        endpoints.find((e) => e.value.startsWith('spark://') || /master/i.test(e.label))?.value ??
+        plain;
+      return `spark-submit --master ${master} app.py`;
+    }
+    case 'flink': {
+      // flink run -m wants the jobmanager RPC host:port, not the web UI URL
+      const rpc =
+        endpoints.find(
+          (e) =>
+            /rpc|jobmanager/i.test(e.label) ||
+            (!/^https?:\/\//.test(e.value) && e.value.includes(':')),
+        )?.value ?? plain;
+      return `flink run -m ${hostPort(rpc)} job.jar`;
+    }
     case 'pulsar':
       return `pulsar-client --url ${plain} produce demo -m "hello"`;
     case 'iceberg':

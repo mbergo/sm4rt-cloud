@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { BrandLoader, CopyButton, GhostButton, PrimaryButton } from './bits';
-import { Card, CopyRow, DangerButton, EmptyState, Input, PageShell, StateDot } from './Compute';
+import { Card, CopyRow, DangerButton, EmptyState, ErrorNote, Input, PageShell, StateDot } from './Compute';
 import { timeAgo } from '../lib/format';
 import { normalizeStatus } from '../lib/status';
 import {
@@ -31,6 +31,11 @@ function titleize(id: string): string {
     .split('-')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
+}
+
+/** Coolify may return bare domains; hrefs need a scheme to not resolve relative. */
+function toHref(domain: string): string {
+  return /^https?:\/\//.test(domain) ? domain : `https://${domain}`;
 }
 
 function TypePill({ type }: { type: string }) {
@@ -59,6 +64,7 @@ export default function MarketplacePage({
   notify: (message: string, tone?: 'ok' | 'err') => void;
 }) {
   const [templates, setTemplates] = useState<string[] | null>(null);
+  const [catalogError, setCatalogError] = useState('');
   const [apps, setApps] = useState<MarketplaceApp[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [query, setQuery] = useState('');
@@ -80,7 +86,11 @@ export default function MarketplacePage({
       })
       .catch((err) => {
         if (!alive) return;
-        if ((err as { status?: number }).status === 503) setUnavailable(true);
+        if ((err as { status?: number }).status === 503) {
+          setUnavailable(true);
+        } else {
+          setCatalogError(err instanceof Error ? err.message : 'failed to load the catalog');
+        }
         setTemplates([]);
       });
     refreshApps();
@@ -196,7 +206,7 @@ export default function MarketplacePage({
                   <p className="mt-2 truncate font-mono text-sm text-stone-100">{app.name}</p>
                   {app.domains[0] ? (
                     <a
-                      href={app.domains[0]}
+                      href={toHref(app.domains[0])}
                       target="_blank"
                       rel="noreferrer"
                       className="mt-1.5 flex items-center gap-1.5 truncate font-mono text-xs text-amber-300 hover:underline"
@@ -237,6 +247,7 @@ export default function MarketplacePage({
                         onClick={() => void remove(app)}
                         disabled={busy === app.uuid}
                         confirmLabel="Confirm?"
+                        ariaLabel={`Delete ${app.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </DangerButton>
@@ -259,26 +270,32 @@ export default function MarketplacePage({
               {filtered.length} of {templates.length}
             </span>
           ) : null}
-          <div className="relative ml-auto w-64">
-            <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
-            <Input
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setExpanded(false);
-              }}
-              placeholder="Search apps"
-              className="pl-9"
-            />
-          </div>
+          {templates === null || templates.length > 0 ? (
+            <div className="relative ml-auto w-64">
+              <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
+              <Input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setExpanded(false);
+                }}
+                placeholder="Search apps"
+                className="pl-9"
+              />
+            </div>
+          ) : null}
         </div>
         {templates === null ? (
           <div className="flex justify-center py-6">
             <BrandLoader size="sm" label="Loading catalog" />
           </div>
+        ) : templates.length === 0 ? (
+          <ErrorNote
+            message={catalogError || 'The catalog came back empty. Refresh to try again.'}
+          />
         ) : filtered.length === 0 ? (
           <Card>
-            <EmptyState text={`No template matches "${query}".`} />
+            <EmptyState text={`No templates match "${query}".`} />
           </Card>
         ) : (
           <>
@@ -431,7 +448,7 @@ export function MarketplaceAppPage({
                 className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-3 py-2"
               >
                 <a
-                  href={domain}
+                  href={toHref(domain)}
                   target="_blank"
                   rel="noreferrer"
                   className="flex min-w-0 items-center gap-1.5 truncate font-mono text-xs text-amber-300 hover:underline"

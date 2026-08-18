@@ -356,11 +356,13 @@ export function putServiceEnv(
 }
 
 export interface ServiceTargetInfo {
-  serviceName: string;
+  /** full swarm service name (target for logs/exec/config) */
+  name: string;
   kind: 'catalog' | 'compute';
-  serviceId: string | null;
-  instanceLabel: string | null;
-  status: RealServiceStatus;
+  /** catalog service id or compute kind, when known */
+  service: string | null;
+  /** human label for pickers */
+  label: string;
 }
 
 export function listServiceTargets(instance: string): Promise<{ targets: ServiceTargetInfo[] }> {

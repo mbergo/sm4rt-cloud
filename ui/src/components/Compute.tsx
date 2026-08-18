@@ -330,9 +330,14 @@ export function CopyRow({ label, value, secret = false }: { label: string; value
 }
 
 function maskSecrets(code: string, secrets: string[]): string {
+  // Dedupe, drop empties, replace longest-first so a secret that is a
+  // prefix of another cannot leak the longer one's suffix.
+  const unique = [...new Set(secrets.filter((secret) => Boolean(secret)))].sort(
+    (a, b) => b.length - a.length,
+  );
   let out = code;
-  for (const secret of secrets) {
-    if (secret) out = out.split(secret).join('••••••••');
+  for (const secret of unique) {
+    out = out.split(secret).join('••••••••');
   }
   return out;
 }
@@ -370,11 +375,14 @@ export function DangerButton({
   onClick,
   confirmLabel = 'Confirm delete',
   disabled,
+  ariaLabel,
 }: {
   children: ReactNode;
   onClick: () => void;
   confirmLabel?: string;
   disabled?: boolean;
+  /** accessible name for icon-only renders; names the resource being deleted */
+  ariaLabel?: string;
 }) {
   const [arm, setArm] = useState(false);
   useEffect(() => {
@@ -386,6 +394,7 @@ export function DangerButton({
     <button
       type="button"
       disabled={disabled}
+      aria-label={ariaLabel}
       onClick={() => {
         if (arm) {
           setArm(false);
@@ -405,7 +414,16 @@ export function DangerButton({
   );
 }
 
-function RowDelete({ onConfirm, disabled }: { onConfirm: () => void; disabled?: boolean }) {
+function RowDelete({
+  name,
+  onConfirm,
+  disabled,
+}: {
+  /** record/resource name, used for the accessible label */
+  name: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+}) {
   const [arm, setArm] = useState(false);
   useEffect(() => {
     if (!arm) return;
@@ -416,6 +434,7 @@ function RowDelete({ onConfirm, disabled }: { onConfirm: () => void; disabled?: 
     return (
       <button
         type="button"
+        aria-label={`Confirm delete ${name}`}
         onClick={() => {
           setArm(false);
           onConfirm();
@@ -430,6 +449,7 @@ function RowDelete({ onConfirm, disabled }: { onConfirm: () => void; disabled?: 
     <button
       type="button"
       disabled={disabled}
+      aria-label={`Delete ${name}`}
       onClick={() => setArm(true)}
       className="rounded-md p-1.5 text-stone-500 transition hover:bg-white/10 hover:text-rose-300 disabled:opacity-40"
     >
@@ -1483,7 +1503,7 @@ export function DnsPage({ instance, notify }: PageProps) {
                   </Td>
                   <Td><Mono>{rec.target}</Mono></Td>
                   <Td className="text-right">
-                    <RowDelete onConfirm={() => remove(rec)} />
+                    <RowDelete name={rec.fqdn} onConfirm={() => remove(rec)} />
                   </Td>
                 </tr>
               ))}
@@ -2335,8 +2355,9 @@ export function RegistryPage({ instance, notify }: PageProps) {
     );
 
   const host = status?.host ?? '';
+  // stdin form keeps the password out of argv (and shell history / ps output)
   const login = status?.user && status?.password
-    ? `docker login ${host} -u ${status.user} -p ${status.password}`
+    ? `echo '${status.password}' | docker login ${host} -u ${status.user} --password-stdin`
     : '';
 
   return (
