@@ -462,7 +462,9 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     env: () => [{ name: 'OLLAMA_KEEP_ALIVE', value: '5m' }],
     resources: {
       requests: { cpu: '500m', memory: '2Gi' },
-      limits: { cpu: '3', memory: '12Gi' },
+      // CPU limit must not exceed the smallest node's core count — docker
+      // hard-rejects the container otherwise (seen on 2-vCPU t3.medium).
+      limits: { cpu: '2', memory: '3Gi' },
     },
     volumes: [{ name: 'models', mountPath: '/root/.ollama', sizeLimit: '12Gi' }],
     httpIngressPort: 11434,

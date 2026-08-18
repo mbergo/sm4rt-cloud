@@ -385,7 +385,7 @@ export function registerComputeRoutes(app: FastifyInstance, deps: ComputeRouteDe
     }),
   );
 
-  // — Object Store: real MinIO per workspace (aws s3 / SDKs, path-style) —
+  // — Object Store: real SeaweedFS per workspace (aws s3 / SDKs, path-style) —
   app.get(`${base}/objectstore`, route(async (ws) => objectstore.status(ws)));
   app.post(
     `${base}/objectstore`,
