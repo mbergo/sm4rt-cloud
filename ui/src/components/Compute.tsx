@@ -6,8 +6,11 @@ import {
   Activity,
   Archive,
   Box,
+  ChevronRight,
   Container,
   Database,
+  Eye,
+  EyeOff,
   GitBranch,
   Globe,
   HardDrive,
@@ -28,6 +31,7 @@ import {
   useRef,
   useState,
   type InputHTMLAttributes,
+  type KeyboardEvent,
   type ReactNode,
   type SelectHTMLAttributes,
 } from 'react';
@@ -134,6 +138,7 @@ import {
   type VmInfo,
   type VmPlanId,
 } from '../lib/compute';
+import { useConfig } from '../lib/config';
 import { timeAgo } from '../lib/format';
 import { useLogConsole } from '../lib/log-console';
 import { BrandLoader, CopyButton, GhostButton, PrimaryButton } from './bits';
@@ -146,7 +151,7 @@ interface PageProps {
 
 // ————— shared primitives —————
 
-function errMsg(err: unknown): string {
+export function errMsg(err: unknown): string {
   if (err instanceof ApiError) return err.message;
   return err instanceof Error ? err.message : 'request failed';
 }
@@ -155,7 +160,7 @@ function isSwarmOnly(err: unknown): boolean {
   return err instanceof ApiError && err.status === 501;
 }
 
-function useComputeData<T>(load: () => Promise<T>, pollMs = 10000) {
+export function useComputeData<T>(load: () => Promise<T>, pollMs = 10000) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [swarmOnly, setSwarmOnly] = useState(false);
@@ -186,7 +191,7 @@ function useComputeData<T>(load: () => Promise<T>, pollMs = 10000) {
   return { data, error, swarmOnly, loading, refresh };
 }
 
-function SwarmOnlyNote() {
+export function SwarmOnlyNote() {
   return (
     <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4 text-sm text-amber-200">
       This service is not available in this workspace&apos;s region. Recreate the workspace on a
@@ -195,7 +200,7 @@ function SwarmOnlyNote() {
   );
 }
 
-function ErrorNote({ message }: { message: string }) {
+export function ErrorNote({ message }: { message: string }) {
   return (
     <div className="rounded-xl border border-rose-400/20 bg-rose-500/5 px-4 py-3 text-sm text-rose-200">
       {message}
@@ -203,7 +208,7 @@ function ErrorNote({ message }: { message: string }) {
   );
 }
 
-function PageShell({
+export function PageShell({
   icon: Icon,
   title,
   subtitle,
@@ -244,17 +249,25 @@ function PageShell({
   );
 }
 
-function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
     <div className={`rounded-xl border border-white/5 bg-white/[0.03] ${className}`}>{children}</div>
   );
 }
 
-function EmptyState({ text }: { text: string }) {
+function DataTable({ children }: { children: ReactNode }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">{children}</table>
+    </div>
+  );
+}
+
+export function EmptyState({ text }: { text: string }) {
   return <p className="px-4 py-8 text-center text-sm text-stone-500">{text}</p>;
 }
 
-function StateDot({ state }: { state: string }) {
+export function StateDot({ state }: { state: string }) {
   const s = state.toLowerCase();
   const color =
     s === 'running' || s === 'ready' || s === 'active'
@@ -272,7 +285,7 @@ function StateDot({ state }: { state: string }) {
   );
 }
 
-function Th({ children, className = '' }: { children?: ReactNode; className?: string }) {
+export function Th({ children, className = '' }: { children?: ReactNode; className?: string }) {
   return (
     <th
       className={`px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-stone-500 ${className}`}
@@ -282,15 +295,15 @@ function Th({ children, className = '' }: { children?: ReactNode; className?: st
   );
 }
 
-function Td({ children, className = '' }: { children?: ReactNode; className?: string }) {
+export function Td({ children, className = '' }: { children?: ReactNode; className?: string }) {
   return <td className={`px-4 py-2.5 align-middle text-sm text-stone-300 ${className}`}>{children}</td>;
 }
 
-function Mono({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function Mono({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <span className={`font-mono text-xs ${className}`}>{children}</span>;
 }
 
-function CopyRow({ label, value, secret = false }: { label: string; value: string; secret?: boolean }) {
+export function CopyRow({ label, value, secret = false }: { label: string; value: string; secret?: boolean }) {
   const [shown, setShown] = useState(!secret);
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-black/20 px-3 py-2">
@@ -316,21 +329,43 @@ function CopyRow({ label, value, secret = false }: { label: string; value: strin
   );
 }
 
-function Snippet({ title, code }: { title: string; code: string }) {
+function maskSecrets(code: string, secrets: string[]): string {
+  let out = code;
+  for (const secret of secrets) {
+    if (secret) out = out.split(secret).join('••••••••');
+  }
+  return out;
+}
+
+export function Snippet({
+  title,
+  code,
+  secrets = [],
+}: {
+  title: string;
+  code: string;
+  secrets?: string[];
+}) {
+  const display = secrets.length > 0 ? maskSecrets(code, secrets) : code;
   return (
     <div className="rounded-lg border border-white/5 bg-black/30">
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
+      <div className="flex items-center justify-between gap-2 border-b border-white/5 px-3 py-1.5">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">{title}</p>
-        <CopyButton value={code} />
+        <span className="flex shrink-0 items-center gap-1">
+          {secrets.length > 0 ? (
+            <span className="text-[10px] text-stone-500">copies real value</span>
+          ) : null}
+          <CopyButton value={code} />
+        </span>
       </div>
       <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed text-stone-300">
-        {code}
+        {display}
       </pre>
     </div>
   );
 }
 
-function DangerButton({
+export function DangerButton({
   children,
   onClick,
   confirmLabel = 'Confirm delete',
@@ -370,7 +405,53 @@ function DangerButton({
   );
 }
 
-function LogPane({
+function RowDelete({ onConfirm, disabled }: { onConfirm: () => void; disabled?: boolean }) {
+  const [arm, setArm] = useState(false);
+  useEffect(() => {
+    if (!arm) return;
+    const t = setTimeout(() => setArm(false), 3000);
+    return () => clearTimeout(t);
+  }, [arm]);
+  if (arm) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setArm(false);
+          onConfirm();
+        }}
+        className="rounded-md px-2 py-1 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/10"
+      >
+        Sure?
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => setArm(true)}
+      className="rounded-md p-1.5 text-stone-500 transition hover:bg-white/10 hover:text-rose-300 disabled:opacity-40"
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function OpenLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-medium text-amber-300 transition hover:border-amber-400/30 hover:text-amber-200"
+    >
+      {children} →
+    </a>
+  );
+}
+
+export function LogPane({
   fetchLogs,
   title = 'Logs',
 }: {
@@ -402,7 +483,7 @@ function LogPane({
   );
 }
 
-function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
@@ -411,7 +492,7 @@ function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
-function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
@@ -420,7 +501,7 @@ function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   );
 }
 
-function Label({ children }: { children: ReactNode }) {
+export function Label({ children }: { children: ReactNode }) {
   return (
     <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-stone-500">
       {children}
@@ -537,7 +618,7 @@ export function ServersPage({ instance, notify }: PageProps) {
         ) : vms.length === 0 ? (
           <EmptyState text="No servers yet. Launch one — it boots in seconds and you SSH straight in." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -546,6 +627,7 @@ export function ServersPage({ instance, notify }: PageProps) {
                 <Th>Plan</Th>
                 <Th>SSH endpoint</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -565,10 +647,15 @@ export function ServersPage({ instance, notify }: PageProps) {
                     </Mono>
                   </Td>
                   <Td className="text-stone-500">{timeAgo(vm.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === vm.id ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -618,6 +705,41 @@ function parseEnvText(text: string): Record<string, string> {
     if (eq > 0) env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
   }
   return env;
+}
+
+function EnvBlock({ env }: { env: Record<string, string> }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="rounded-lg border border-white/5 bg-black/20 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+          Environment
+        </p>
+        <button
+          type="button"
+          onClick={() => setShown((v) => !v)}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-stone-400 hover:bg-white/10 hover:text-stone-100"
+        >
+          {shown ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+          {shown ? 'Hide values' : 'Reveal values'}
+        </button>
+      </div>
+      <div className="space-y-1">
+        {Object.entries(env).map(([k, v]) => (
+          <div key={k} className="flex items-center gap-2">
+            <span className="w-40 shrink-0 truncate font-mono text-xs text-stone-500" title={k}>
+              {k}
+            </span>
+            <span className="shrink-0 text-xs text-stone-600">=</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">
+              {shown ? v : '••••••••'}
+            </span>
+            <CopyButton value={`${k}=${v}`} className="!h-6 !w-6" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function ContainersPage({ instance, notify }: PageProps) {
@@ -755,7 +877,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
         ) : tasks.length === 0 ? (
           <EmptyState text="No containers yet. Deploy any public image and get an HTTPS URL instantly." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -765,6 +887,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
                 <Th>Replicas</Th>
                 <Th>URL</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -804,10 +927,15 @@ export function ContainersPage({ instance, notify }: PageProps) {
                     )}
                   </Td>
                   <Td className="text-stone-500">{timeAgo(t.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === t.name ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -853,18 +981,7 @@ export function ContainersPage({ instance, notify }: PageProps) {
               ) : null}
             </p>
           ) : null}
-          {Object.keys(detail.env).length > 0 ? (
-            <div className="rounded-lg border border-white/5 bg-black/20 p-3">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-stone-500">
-                Environment
-              </p>
-              {Object.entries(detail.env).map(([k, v]) => (
-                <p key={k} className="font-mono text-xs text-stone-400">
-                  {k}=<span className="text-stone-300">{v}</span>
-                </p>
-              ))}
-            </div>
-          ) : null}
+          {Object.keys(detail.env).length > 0 ? <EnvBlock env={detail.env} /> : null}
           <LogPane fetchLogs={() => taskLogs(instance, detail.name)} />
         </Card>
       ) : null}
@@ -989,7 +1106,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
         ) : dbs.length === 0 ? (
           <EmptyState text="No databases yet. Create one — connection string ready in seconds." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -998,6 +1115,7 @@ export function DatabasesPage({ instance, notify }: PageProps) {
                 <Th>Size</Th>
                 <Th>Endpoint</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -1019,10 +1137,15 @@ export function DatabasesPage({ instance, notify }: PageProps) {
                     </Mono>
                   </Td>
                   <Td className="text-stone-500">{timeAgo(db.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === db.name ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -1040,7 +1163,11 @@ export function DatabasesPage({ instance, notify }: PageProps) {
             <CopyRow label="User" value={detail.user} />
             <CopyRow label="Database" value={detail.database} />
           </div>
-          <Snippet title="Connect from your terminal" code={dbSnippet(detail)} />
+          <Snippet
+            title="Connect from your terminal"
+            code={dbSnippet(detail)}
+            secrets={[detail.password]}
+          />
           <LogPane fetchLogs={() => databaseLogs(instance, detail.name)} />
         </Card>
       ) : null}
@@ -1156,7 +1283,7 @@ export function CachesPage({ instance, notify }: PageProps) {
         ) : caches.length === 0 ? (
           <EmptyState text="No caches yet. Redis PING in under 10 seconds." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -1165,6 +1292,7 @@ export function CachesPage({ instance, notify }: PageProps) {
                 <Th>Size</Th>
                 <Th>Endpoint</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -1186,10 +1314,15 @@ export function CachesPage({ instance, notify }: PageProps) {
                     </Mono>
                   </Td>
                   <Td className="text-stone-500">{timeAgo(c.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === c.name ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -1208,6 +1341,7 @@ export function CachesPage({ instance, notify }: PageProps) {
           <Snippet
             title="Test it"
             code={`redis-cli -u '${detail.connectionUri}' PING`}
+            secrets={[detail.password]}
           />
         </Card>
       ) : null}
@@ -1218,6 +1352,8 @@ export function CachesPage({ instance, notify }: PageProps) {
 // ————— DNS (Route53-style zone) —————
 
 export function DnsPage({ instance, notify }: PageProps) {
+  const config = useConfig();
+  const zoneRoot = `${instance}.${config.instanceDomain}`;
   const { data, error, swarmOnly, loading, refresh } = useComputeData(
     useCallback(() => listDns(instance), [instance]),
   );
@@ -1263,8 +1399,14 @@ export function DnsPage({ instance, notify }: PageProps) {
     <PageShell
       icon={Globe}
       title="DNS zone"
-      subtitle={`Your zone: *.${instance}.… — ALIAS records route traffic through the edge instantly`}
+      subtitle={`ALIAS records under *.${zoneRoot} route through the edge instantly`}
       onRefresh={() => refresh()}
+      actions={
+        <span className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 py-1 pl-2.5 pr-1">
+          <Mono className="text-stone-200">{zoneRoot}</Mono>
+          <CopyButton value={zoneRoot} />
+        </span>
+      }
     >
       {error && !swarmOnly ? <ErrorNote message={error} /> : null}
       <Card className="p-4">
@@ -1309,7 +1451,7 @@ export function DnsPage({ instance, notify }: PageProps) {
         ) : records.length === 0 ? (
           <EmptyState text="No records yet. Add an ALIAS pointing to a container task or any URL." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>FQDN</Th>
@@ -1340,15 +1482,13 @@ export function DnsPage({ instance, notify }: PageProps) {
                     </span>
                   </Td>
                   <Td><Mono>{rec.target}</Mono></Td>
-                  <Td>
-                    <DangerButton onClick={() => remove(rec)} confirmLabel="Confirm">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </DangerButton>
+                  <Td className="text-right">
+                    <RowDelete onConfirm={() => remove(rec)} />
                   </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
     </PageShell>
@@ -1503,7 +1643,7 @@ export function GatewaysPage({ instance, notify }: PageProps) {
         ) : gateways.length === 0 ? (
           <EmptyState text="No gateways yet. Compose one URL out of many backends." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -1511,6 +1651,7 @@ export function GatewaysPage({ instance, notify }: PageProps) {
                 <Th>URL</Th>
                 <Th>Routes</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -1535,10 +1676,15 @@ export function GatewaysPage({ instance, notify }: PageProps) {
                   </Td>
                   <Td>{gw.routes.length}</Td>
                   <Td className="text-stone-500">{timeAgo(gw.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === gw.name ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -1668,7 +1814,7 @@ export function CdnPage({ instance, notify }: PageProps) {
         ) : cdns.length === 0 ? (
           <EmptyState text="No distributions yet. Put Varnish in front of any origin in one step." />
         ) : (
-          <table className="w-full">
+          <DataTable>
             <thead>
               <tr className="border-b border-white/5">
                 <Th>Name</Th>
@@ -1677,6 +1823,7 @@ export function CdnPage({ instance, notify }: PageProps) {
                 <Th>Origin</Th>
                 <Th>TTL</Th>
                 <Th>Created</Th>
+                <Th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -1702,10 +1849,15 @@ export function CdnPage({ instance, notify }: PageProps) {
                   <Td><Mono>{c.origin}</Mono></Td>
                   <Td>{c.ttlSeconds}s</Td>
                   <Td className="text-stone-500">{timeAgo(c.createdAt)}</Td>
+                  <Td>
+                    <ChevronRight
+                      className={`ml-auto h-3.5 w-3.5 text-stone-500 transition-transform ${selected === c.name ? 'rotate-90' : ''}`}
+                    />
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
       </Card>
 
@@ -1809,18 +1961,12 @@ export function ObservabilityPage({ instance, notify }: PageProps) {
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <CopyRow label="Grafana" value={obs.grafanaUrl} />
-              <CopyRow label="Grafana login" value={`${obs.grafanaUser} / ${obs.grafanaPassword}`} secret />
+              <CopyRow label="Grafana user" value={obs.grafanaUser} />
+              <CopyRow label="Grafana password" value={obs.grafanaPassword} secret />
               <CopyRow label="OTLP endpoint (public)" value={obs.otlpUrl} />
               <CopyRow label="OTLP endpoint (in-cluster)" value={obs.otlpInternal} />
             </div>
-            <a
-              href={obs.grafanaUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 hover:brightness-110"
-            >
-              Open Grafana →
-            </a>
+            <OpenLink href={obs.grafanaUrl}>Open Grafana</OpenLink>
           </Card>
           <Card className="space-y-3 p-4">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
@@ -1940,7 +2086,12 @@ export function DevopsPage({ instance, notify }: PageProps) {
         <>
           <Card className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
+              <div className="flex items-center gap-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
+                  Platform
+                </p>
+                {status.state === 'starting' ? <BrandLoader size="sm" label="Provisioning" /> : <StateDot state={status.state} />}
+              </div>
               <div className="flex gap-2">
                 {!status.bootstrapped ? (
                   <GhostButton
@@ -1961,36 +2112,33 @@ export function DevopsPage({ instance, notify }: PageProps) {
                 </DangerButton>
               </div>
             </div>
-            {status.message ? <p className="text-xs text-amber-300/80">{status.message}</p> : null}
+            {status.message ? (
+              <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+                {status.message}
+              </div>
+            ) : null}
             <div className="grid gap-2 sm:grid-cols-2">
-              {status.gitUrl ? <CopyRow label="Git (Gitea)" value={status.gitUrl} /> : null}
-              {status.ciUrl ? <CopyRow label="CI (Woodpecker)" value={status.ciUrl} /> : null}
-              {status.adminUser && status.adminPassword ? (
-                <CopyRow label="Admin login" value={`${status.adminUser} / ${status.adminPassword}`} secret />
-              ) : null}
-              {status.registry ? <CopyRow label="Container registry" value={status.registry} /> : null}
-            </div>
-            <div className="flex gap-2">
               {status.gitUrl ? (
-                <a
-                  href={status.gitUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 hover:brightness-110"
-                >
-                  Open Gitea →
-                </a>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <CopyRow label="Git (Gitea)" value={status.gitUrl} />
+                  </div>
+                  <OpenLink href={status.gitUrl}>Open</OpenLink>
+                </div>
               ) : null}
               {status.ciUrl ? (
-                <a
-                  href={status.ciUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-stone-200 hover:border-white/20"
-                >
-                  Open CI →
-                </a>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <CopyRow label="CI (Woodpecker)" value={status.ciUrl} />
+                  </div>
+                  <OpenLink href={status.ciUrl}>Open</OpenLink>
+                </div>
               ) : null}
+              {status.adminUser ? <CopyRow label="Admin user" value={status.adminUser} /> : null}
+              {status.adminPassword ? (
+                <CopyRow label="Admin password" value={status.adminPassword} secret />
+              ) : null}
+              {status.registry ? <CopyRow label="Container registry" value={status.registry} /> : null}
             </div>
           </Card>
 
@@ -2047,7 +2195,7 @@ export function DevopsPage({ instance, notify }: PageProps) {
             {appList.length === 0 ? (
               <EmptyState text="No GitOps apps yet. Point one at a repo with deploy/sm4rt.yaml and push." />
             ) : (
-              <table className="w-full">
+              <DataTable>
                 <thead>
                   <tr className="border-b border-white/5">
                     <Th>App</Th>
@@ -2112,18 +2260,32 @@ export function DevopsPage({ instance, notify }: PageProps) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
-            <Snippet
-              title="deploy/sm4rt.yaml — the whole contract"
-              code={[
-                'tasks:',
-                '  - name: web',
-                '    image: ${REGISTRY}/web:${COMMIT}',
-                '    port: 8080',
-                '    replicas: 2',
-              ].join('\n')}
-            />
+          </Card>
+
+          <Card>
+            <details className="group">
+              <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-stone-500 transition hover:text-stone-300">
+                Deploy contract
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+              </summary>
+              <div className="space-y-2 px-4 pb-4">
+                <p className="text-xs text-stone-500">
+                  Commit deploy/sm4rt.yaml to your repo. The reconciler reads it on every sync.
+                </p>
+                <Snippet
+                  title="deploy/sm4rt.yaml"
+                  code={[
+                    'tasks:',
+                    '  - name: web',
+                    '    image: ${REGISTRY}/web:${COMMIT}',
+                    '    port: 8080',
+                    '    replicas: 2',
+                  ].join('\n')}
+                />
+              </div>
+            </details>
           </Card>
         </>
       )}
@@ -2249,7 +2411,11 @@ export function RegistryPage({ instance, notify }: PageProps) {
                 Push an image
               </p>
               <div className="grid gap-2">
-                <Snippet title="1 — Log in" code={login} />
+                <Snippet
+                  title="1 — Log in"
+                  code={login}
+                  secrets={status.password ? [status.password] : []}
+                />
                 <Snippet title="2 — Tag" code={`docker tag alpine ${host}/alpine:v1`} />
                 <Snippet title="3 — Push" code={`docker push ${host}/alpine:v1`} />
               </div>
@@ -2268,7 +2434,7 @@ export function RegistryPage({ instance, notify }: PageProps) {
             {repoList.length === 0 ? (
               <EmptyState text="No images yet — push one to see it here." />
             ) : (
-              <table className="w-full">
+              <DataTable>
                 <thead>
                   <tr className="border-b border-white/5">
                     <Th>Repository</Th>
@@ -2312,7 +2478,7 @@ export function RegistryPage({ instance, notify }: PageProps) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </Card>
         </>
@@ -2440,6 +2606,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
                 <Snippet
                   title="1 — Credentials"
                   code={`export AWS_ACCESS_KEY_ID=${status.accessKey}\nexport AWS_SECRET_ACCESS_KEY=${status.secretKey ?? ''}`}
+                  secrets={status.secretKey ? [status.secretKey] : []}
                 />
                 <Snippet
                   title="2 — Make a bucket"
@@ -2485,7 +2652,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
             {bucketList.length === 0 ? (
               <EmptyState text="No buckets yet — create one above or via the AWS CLI." />
             ) : (
-              <table className="w-full">
+              <DataTable>
                 <thead>
                   <tr className="border-b border-white/5">
                     <Th>Bucket</Th>
@@ -2519,7 +2686,7 @@ export function ObjectStorePage({ instance, notify }: PageProps) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </Card>
         </>
@@ -2543,6 +2710,8 @@ export function TableStorePage({ instance, notify }: PageProps) {
   const [busy, setBusy] = useState(false);
   const [newTable, setNewTable] = useState('');
   const [hashKey, setHashKey] = useState('id');
+  const [rangeKey, setRangeKey] = useState('');
+  const [rangeType, setRangeType] = useState('S');
   const logs = useLogConsole();
 
   const status: TableStoreStatus | null = data;
@@ -2648,6 +2817,7 @@ export function TableStorePage({ instance, notify }: PageProps) {
                 <Snippet
                   title="1 — Credentials"
                   code={`export AWS_ACCESS_KEY_ID=${status.accessKey}\nexport AWS_SECRET_ACCESS_KEY='${status.secretKey}'`}
+                  secrets={[status.secretKey]}
                 />
                 <Snippet
                   title="2 — List tables"
@@ -2666,44 +2836,71 @@ export function TableStorePage({ instance, notify }: PageProps) {
               <p className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
                 Tables
               </p>
-              <div className="flex items-center gap-2">
-                <input
+              <GhostButton onClick={() => tables.refresh()} className="!px-2 !py-0.5 !text-xs">
+                <RefreshCw className="h-3 w-3" />
+              </GhostButton>
+            </div>
+            <div className="flex flex-wrap items-end gap-3 border-b border-white/5 px-4 py-3">
+              <label className="w-48">
+                <Label>Table name</Label>
+                <Input
                   value={newTable}
                   onChange={(e) => setNewTable(e.target.value)}
-                  placeholder="table-name"
-                  className="w-36 rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
+                  placeholder="my-table"
+                  className="!font-mono !text-xs"
                 />
-                <input
+              </label>
+              <label className="w-40">
+                <Label>Partition key</Label>
+                <Input
                   value={hashKey}
                   onChange={(e) => setHashKey(e.target.value)}
-                  placeholder="partition key"
-                  className="w-28 rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
+                  placeholder="id"
+                  className="!font-mono !text-xs"
                 />
-                <GhostButton
-                  onClick={() =>
-                    run(async () => {
-                      await createTable(instance, {
-                        name: newTable.trim(),
-                        hashKey: hashKey.trim() || 'id',
-                        hashType: 'S',
-                      });
-                      setNewTable('');
-                    }, `Table ${newTable.trim()} created`)
-                  }
-                  disabled={busy || !newTable.trim()}
-                  className="!px-2 !py-0.5 !text-xs"
+              </label>
+              <label className="w-40">
+                <Label>Sort key (optional)</Label>
+                <Input
+                  value={rangeKey}
+                  onChange={(e) => setRangeKey(e.target.value)}
+                  placeholder="createdAt"
+                  className="!font-mono !text-xs"
+                />
+              </label>
+              <label className="w-32">
+                <Label>Sort key type</Label>
+                <Select
+                  value={rangeType}
+                  onChange={(e) => setRangeType(e.target.value)}
+                  disabled={!rangeKey.trim()}
                 >
-                  <Plus className="h-3 w-3" /> Create
-                </GhostButton>
-                <GhostButton onClick={() => tables.refresh()} className="!px-2 !py-0.5 !text-xs">
-                  <RefreshCw className="h-3 w-3" />
-                </GhostButton>
-              </div>
+                  <option value="S">String</option>
+                  <option value="N">Number</option>
+                </Select>
+              </label>
+              <GhostButton
+                onClick={() =>
+                  run(async () => {
+                    await createTable(instance, {
+                      name: newTable.trim(),
+                      hashKey: hashKey.trim() || 'id',
+                      hashType: 'S',
+                      ...(rangeKey.trim() ? { rangeKey: rangeKey.trim(), rangeType } : {}),
+                    });
+                    setNewTable('');
+                    setRangeKey('');
+                  }, `Table ${newTable.trim()} created`)
+                }
+                disabled={busy || !newTable.trim()}
+              >
+                <Plus className="h-3.5 w-3.5" /> Create table
+              </GhostButton>
             </div>
             {tableList.length === 0 ? (
               <EmptyState text="No tables yet — create one above or via the AWS CLI." />
             ) : (
-              <table className="w-full">
+              <DataTable>
                 <thead>
                   <tr className="border-b border-white/5">
                     <Th>Table</Th>
@@ -2745,7 +2942,7 @@ export function TableStorePage({ instance, notify }: PageProps) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </Card>
         </>
@@ -2852,7 +3049,12 @@ export function BrokerPage({ instance, notify }: PageProps) {
             <div className="grid gap-2 sm:grid-cols-2">
               {status.amqpUrl ? <CopyRow label="AMQP URL" value={status.amqpUrl} secret /> : null}
               {status.managementUrl ? (
-                <CopyRow label="Management UI" value={status.managementUrl} />
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <CopyRow label="Management UI" value={status.managementUrl} />
+                  </div>
+                  <OpenLink href={status.managementUrl}>Open</OpenLink>
+                </div>
               ) : null}
               {status.user ? <CopyRow label="Username" value={status.user} /> : null}
               {status.password ? <CopyRow label="Password" value={status.password} secret /> : null}
@@ -2868,10 +3070,12 @@ export function BrokerPage({ instance, notify }: PageProps) {
                 <Snippet
                   title="Python (pika)"
                   code={`import pika\nconn = pika.BlockingConnection(pika.URLParameters('${status.amqpUrl}'))\nch = conn.channel()\nch.basic_publish(exchange='', routing_key='jobs', body=b'hello')`}
+                  secrets={status.password ? [status.password] : []}
                 />
                 <Snippet
                   title="Node (amqplib)"
                   code={`const amqp = require('amqplib');\nconst conn = await amqp.connect('${status.amqpUrl}');`}
+                  secrets={status.password ? [status.password] : []}
                 />
               </div>
             </Card>
@@ -2909,7 +3113,7 @@ export function BrokerPage({ instance, notify }: PageProps) {
             {queueList.length === 0 ? (
               <EmptyState text="No queues yet — create one above or via AMQP." />
             ) : (
-              <table className="w-full">
+              <DataTable>
                 <thead>
                   <tr className="border-b border-white/5">
                     <Th>Queue</Th>
@@ -2942,7 +3146,7 @@ export function BrokerPage({ instance, notify }: PageProps) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </Card>
         </>
@@ -2996,6 +3200,19 @@ export function FunctionsRealPage({ instance, notify }: PageProps) {
     } catch (err) {
       notify(errMsg(err), 'err');
     }
+  };
+
+  const editorKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    setCode(`${el.value.slice(0, start)}  ${el.value.slice(end)}`);
+    requestAnimationFrame(() => {
+      el.selectionStart = start + 2;
+      el.selectionEnd = start + 2;
+    });
   };
 
   if (swarmOnly)
@@ -3057,22 +3274,24 @@ export function FunctionsRealPage({ instance, notify }: PageProps) {
       ) : (
         <div className="space-y-3">
           {fns.map((fn) => (
-            <Card key={fn.name} className="p-4">
+            <Card key={fn.name} className="space-y-2 p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <StateDot state={fn.state} />
                 <Mono className="text-sm text-stone-100">{fn.name}</Mono>
                 <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-widest text-stone-400">
                   {fn.runtime}
                 </span>
+              </div>
+              <div className="flex items-center gap-2">
                 <a
                   href={fn.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-mono text-xs text-amber-300 hover:underline"
+                  className="min-w-0 truncate font-mono text-xs text-amber-300 hover:underline"
                 >
                   {fn.url.replace(/^https?:\/\//, '')}
                 </a>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex shrink-0 items-center gap-2">
                   <GhostButton
                     onClick={() => openEditor(fn.name)}
                     className="!px-2.5 !py-1 !text-xs"
@@ -3106,12 +3325,17 @@ export function FunctionsRealPage({ instance, notify }: PageProps) {
               </div>
               {editing === fn.name ? (
                 <div className="mt-3 space-y-2">
+                  <Snippet
+                    title="Invoke"
+                    code={`curl -X POST ${fn.url} -H 'content-type: application/json' -d '{"name":"world"}'`}
+                  />
                   <textarea
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
+                    onKeyDown={editorKeyDown}
                     spellCheck={false}
                     rows={Math.min(24, Math.max(8, code.split('\n').length + 1))}
-                    className="w-full rounded-xl border border-white/10 bg-stone-950/70 p-3 font-mono text-xs leading-relaxed text-stone-200 outline-none focus:border-amber-400/50"
+                    className="min-h-64 w-full rounded-xl border border-white/10 bg-black/50 p-4 font-mono text-xs leading-relaxed text-stone-200 outline-none focus:border-amber-400/50"
                   />
                   <div className="flex gap-2">
                     <PrimaryButton

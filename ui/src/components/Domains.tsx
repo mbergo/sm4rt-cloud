@@ -20,7 +20,7 @@ import {
   type WorkspaceDomain,
 } from '../lib/domains';
 import { timeAgo } from '../lib/format';
-import { CopyButton, GhostButton, PrimaryButton } from './bits';
+import { BrandLoader, CopyButton, GhostButton, PrimaryButton } from './bits';
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : 'request failed';
@@ -50,7 +50,7 @@ function StatusPill({ status }: { status: DomainInfo['status'] }) {
 function RecordRow({ type, name, value }: { type: string; name: string; value: string }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-black/25 px-3 py-2">
-      <span className="w-14 shrink-0 rounded-md bg-white/5 px-2 py-0.5 text-center font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300">
+      <span className="w-14 shrink-0 rounded-md bg-white/5 px-2 py-0.5 text-center font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-300">
         {type}
       </span>
       <div className="min-w-0 flex-1">
@@ -96,7 +96,7 @@ function DomainCard({
     try {
       const res = await verifyDomain(row.domain);
       if (res.ok) {
-        notify(`${row.domain} verified — you can set it as the workspace default now.`);
+        notify(`${row.domain} verified. You can set it as the workspace default now.`);
         setVerifyDetail(null);
         refresh();
       } else {
@@ -118,7 +118,7 @@ function DomainCard({
       const res = await deleteDomain(row.domain);
       notify(
         res.workspacesReset.length
-          ? `${row.domain} removed — endpoints moved back to the platform domain.`
+          ? `${row.domain} removed. Endpoints moved back to the platform domain.`
           : `${row.domain} removed.`,
       );
       refresh();
@@ -132,7 +132,7 @@ function DomainCard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5">
-            <Globe2 className="h-[18px] w-[18px] text-teal-300" />
+            <Globe2 className="h-[18px] w-[18px] text-amber-300" />
           </div>
           <div>
             <p className="font-mono text-sm font-semibold text-stone-100">{row.domain}</p>
@@ -144,7 +144,7 @@ function DomainCard({
         </div>
         <div className="flex items-center gap-2">
           {isDefault ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-400/20 bg-teal-500/10 px-2.5 py-0.5 text-xs font-medium text-teal-300">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-300">
               <ShieldCheck className="h-3.5 w-3.5" /> Workspace default
             </span>
           ) : null}
@@ -167,7 +167,7 @@ function DomainCard({
         <div className="mt-4 space-y-3">
           <p className="text-xs leading-relaxed text-stone-400">
             Create these records at your DNS provider. This proves you own the domain and routes
-            traffic to the platform edge — Sm4rt Cloud never touches your DNS.
+            traffic to the platform edge. Sm4rt Cloud never touches your DNS.
           </p>
           <div className="space-y-2">
             {row.records.map((rec) => (
@@ -179,7 +179,7 @@ function DomainCard({
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 {verifyDetail}. DNS changes can take a few minutes (sometimes up to your record TTL)
-                to propagate — try again shortly.
+                to propagate. Try again shortly.
               </span>
             </div>
           ) : null}
@@ -193,7 +193,7 @@ function DomainCard({
       ) : !isDefault ? (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/5 bg-black/20 px-3 py-2.5">
           <p className="text-xs leading-relaxed text-stone-400">
-            Make this the workspace default — new and existing endpoints will move to{' '}
+            Make this the workspace default. New and existing endpoints will move to{' '}
             <span className="font-mono text-stone-300">*.{row.domain}</span>.
           </p>
           <GhostButton onClick={() => onSetDefault(row.domain)}>
@@ -241,7 +241,7 @@ export default function DomainsPage({
     try {
       await registerDomain(instance, domain);
       setInput('');
-      notify(`${domain} registered — now create the DNS records shown below.`);
+      notify(`${domain} registered. Now create the DNS records shown below.`);
       refresh();
     } catch (err) {
       notify(errMsg(err), 'err');
@@ -257,7 +257,7 @@ export default function DomainsPage({
       const count = res.relabeled.length;
       notify(
         domain
-          ? `Default domain set to ${domain}${count ? ` — ${count} endpoint${count === 1 ? '' : 's'} relabeled` : ''}.`
+          ? `Default domain set to ${domain}${count ? ` (${count} endpoint${count === 1 ? '' : 's'} relabeled)` : ''}.`
           : 'Endpoints moved back to the platform domain.',
       );
       setConfirmDefault(null);
@@ -310,7 +310,7 @@ export default function DomainsPage({
             <p className="mt-0.5 text-xs text-stone-500">
               {effectiveDefault
                 ? 'Custom domain (yours)'
-                : 'Platform domain — register a domain below to use your own'}
+                : 'Platform domain. Register a domain below to use your own'}
             </p>
           </div>
           {effectiveDefault ? (
@@ -355,7 +355,9 @@ export default function DomainsPage({
       </Card>
 
       {domains === null && !error ? (
-        <div className="h-24 animate-pulse rounded-xl border border-white/5 bg-white/[0.03]" />
+        <div className="flex justify-center py-8">
+          <BrandLoader size="sm" label="Loading domains" />
+        </div>
       ) : domains && domains.length === 0 ? (
         <Card>
           <p className="px-4 py-8 text-center text-sm text-stone-500">
@@ -389,8 +391,8 @@ export default function DomainsPage({
               </h3>
             </div>
             <p className="mt-3 text-sm leading-relaxed text-stone-400">
-              All endpoints in <span className="font-mono text-stone-200">{instance}</span> — tasks,
-              gateways, CDN, DevOps, observability — will move to{' '}
+              All endpoints in <span className="font-mono text-stone-200">{instance}</span> (tasks,
+              gateways, CDN, DevOps, observability) will move to{' '}
               <span className="font-mono text-stone-200">*.{confirmDefault}</span>. Old platform
               URLs stop working immediately.
             </p>

@@ -117,7 +117,6 @@ import {
   type RealServiceStatus,
   type ServiceCategory,
   type ServiceConfigInfo,
-  type ServiceInstanceRef,
   type ExplorerService,
   SERVICE_CATEGORIES,
   REGIONS,
@@ -144,7 +143,7 @@ import {
   TableStorePage,
 } from './Compute';
 import { computeSummary, computeDiscovery, getObservability, type DiscoveredService, type ObsInfo } from '../lib/compute';
-import { LogConsoleContext, type LogConsoleApi, type LogTarget } from '../lib/log-console';
+import { LogConsoleContext, useLogConsole, type LogConsoleApi, type LogTarget } from '../lib/log-console';
 import ClusterBar from './ClusterBar';
 import DomainsPage from './Domains';
 import MarketplacePage, { MarketplaceAppPage } from './Marketplace';
@@ -691,7 +690,14 @@ export default function Console({
           <RegistryPage instance={name} notify={notify} />
         ) : (
           <RegionContext.Provider value={region}>
-            <ServiceView key={`${section}:${region}`} instance={name} service={section} notify={notify} />
+            <ServiceView
+              key={`${section}:${region}`}
+              instance={name}
+              // every non-service section is handled above, so only the
+              // emulated AWS sections can fall through to here
+              service={section as EmulatedServiceId}
+              notify={notify}
+            />
           </RegionContext.Provider>
         )}
       </div>
@@ -719,7 +725,7 @@ function InlineLogTerminal({ instance }: { instance: string }) {
       .then((data) => {
         if (!alive) return;
         setTargets(data.targets);
-        setTarget((prev) => prev || data.targets[0]?.name || '');
+        setTarget((prev: string) => prev || data.targets[0]?.serviceName || '');
       })
       .catch(() => undefined);
     return () => {
@@ -781,8 +787,8 @@ function InlineLogTerminal({ instance }: { instance: string }) {
           className="rounded-lg border border-white/10 bg-stone-900 px-2.5 py-1 font-mono text-[11px] text-stone-300 outline-none focus:border-amber-400/50"
         >
           {targets.map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.label}
+            <option key={t.serviceName} value={t.serviceName}>
+              {t.instanceLabel ?? t.serviceName}
             </option>
           ))}
         </select>
@@ -1428,7 +1434,7 @@ function ServicePanel({
       .then((data) => {
         setConfig(data);
         setEnvText(data.env.join('\n'));
-        setEnvMsg('saved — service restarting with new env');
+        setEnvMsg('saved; service restarting with new env');
       })
       .catch((err: unknown) => {
         setEnvMsg(err instanceof Error ? err.message : 'failed to save');
@@ -1670,9 +1676,11 @@ function AgentRunRow({ instance, run }: { instance: string; run: AgentRun }) {
         ) : null}
       </div>
       {open ? (
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-white/5 bg-black/40 px-4 py-3 font-mono text-xs leading-relaxed text-stone-300">
-          {logs || 'loading agent logs…'}
-        </pre>
+        <div className="border-t border-white/5 bg-black/20 px-4 py-3">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-stone-300">
+            {logs || 'loading agent logs…'}
+          </pre>
+        </div>
       ) : null}
     </li>
   );
@@ -1749,15 +1757,21 @@ function OtelAgentView({
           required
           className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-sm text-stone-100 outline-none transition focus:border-amber-400/50"
         />
-        <input
-          value={githubToken}
-          onChange={(event) => setGithubToken(event.target.value)}
-          placeholder="GitHub token (repo scope — used to push the branch and open the PR)"
-          type="password"
-          required
-          autoComplete="off"
-          className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-sm text-stone-100 outline-none transition focus:border-amber-400/50"
-        />
+        <div>
+          <input
+            value={githubToken}
+            onChange={(event: { target: { value: string } }) => setGithubToken(event.target.value)}
+            placeholder="GitHub token (repo scope, used to push the branch and open the PR)"
+            type="password"
+            required
+            autoComplete="off"
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-sm text-stone-100 outline-none transition focus:border-amber-400/50"
+          />
+          <p className="mt-1 text-[10px] text-stone-600">
+            Sent once with this run and injected into the short-lived agent job; the control plane
+            does not store it.
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
           <input
             value={model}
@@ -1787,8 +1801,7 @@ function OtelAgentView({
           </PrimaryButton>
         </div>
         <p className="text-[11px] text-stone-500">
-          Requires the Ollama service running on this instance. The token is only injected into the
-          short-lived agent job — it is not stored.
+          Requires the Ollama service running on this instance.
         </p>
       </form>
 
@@ -2009,6 +2022,133 @@ function MonitoringView({ instance }: { instance: string }) {
   );
 }
 
+/**
+ * Shared card for the service catalog and the data engineering stages.
+ * Stop is a two-tap arm-to-confirm; running cards get an amber border tint,
+ * the first endpoint as a mono chip, and the replica count when scaled out.
+ */
+function CatalogServiceCard({
+  icon: Icon,
+  title,
+  subtitle,
+  description,
+  badge,
+  service,
+  busy,
+  onOpen,
+  onAct,
+}: {
+  icon: typeof Archive;
+  title: string;
+  subtitle: string;
+  description: string;
+  badge?: ReactNode;
+  service?: RealServiceInfo;
+  busy: boolean;
+  onOpen: () => void;
+  onAct?: (action: 'start' | 'stop') => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  const status: RealServiceStatus = service?.status ?? 'stopped';
+  const running = status === 'running';
+  const canStart = status === 'stopped' || status === 'error';
+  const firstEndpoint = running ? service?.endpoints[0]?.value : undefined;
+  const replicas = service?.instances?.length ?? 0;
+
+  const act = () => {
+    if (!onAct) {
+      return;
+    }
+    if (canStart) {
+      onAct('start');
+      return;
+    }
+    if (!armed) {
+      setArmed(true);
+      setTimeout(() => setArmed(false), 4000);
+      return;
+    }
+    setArmed(false);
+    onAct('stop');
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event: { key: string; preventDefault: () => void }) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className={`group cursor-pointer rounded-xl border bg-white/[0.03] p-4 text-left transition hover:bg-white/[0.05] ${
+        running
+          ? 'border-amber-400/20 hover:border-amber-400/40'
+          : 'border-white/10 hover:border-amber-500/30'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-300 transition group-hover:border-amber-500/30 group-hover:text-amber-200">
+            <Icon className="h-4.5 w-4.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-stone-100">
+              <span className="truncate">{title}</span>
+              {badge}
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${SERVICE_STATUS_DOT[status]}`} />
+            </p>
+            <p className="truncate font-mono text-[10px] text-stone-500">{subtitle}</p>
+          </div>
+        </div>
+        {onAct && service ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(event: { stopPropagation: () => void }) => {
+              event.stopPropagation();
+              act();
+            }}
+            className={`inline-flex h-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
+              canStart
+                ? 'w-7 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                : armed
+                  ? 'border-rose-500/40 bg-rose-500/15 px-2 text-[10px] font-semibold text-rose-200'
+                  : 'w-7 border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
+            }`}
+            aria-label={canStart ? `Start ${title}` : `Stop ${title}`}
+          >
+            {busy ? (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            ) : canStart ? (
+              <Play className="h-3.5 w-3.5" />
+            ) : armed ? (
+              'Sure?'
+            ) : (
+              <Square className="h-3.5 w-3.5" />
+            )}
+          </button>
+        ) : null}
+      </div>
+      {firstEndpoint ? (
+        <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate rounded-md border border-white/10 bg-black/30 px-2 py-0.5 font-mono text-[10px] text-amber-200/80">
+            {firstEndpoint}
+          </span>
+          {replicas > 1 ? (
+            <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-stone-400">
+              ×{replicas}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">{description}</p>
+    </div>
+  );
+}
+
 function ServicesCatalog({
   instance,
   notify,
@@ -2116,70 +2256,19 @@ function ServicesCatalog({
               {CATEGORY_META[category]}
             </h3>
             <div className="mt-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {entries.map((service) => {
-                const Icon = SERVICE_ICON[service.id];
-                const canStart = service.status === 'stopped' || service.status === 'error';
-                const busy = busyId === service.id;
-                return (
-                  <div
-                    key={service.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelected(service.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        setSelected(service.id);
-                      }
-                    }}
-                    className="group cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-amber-500/30 hover:bg-white/[0.05]"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-300 transition group-hover:border-amber-500/30 group-hover:text-amber-200">
-                          <Icon className="h-4.5 w-4.5" />
-                        </span>
-                        <div>
-                          <p className="flex items-center gap-1.5 text-sm font-semibold text-stone-100">
-                            {service.label}
-                            <span
-                              className={`h-1.5 w-1.5 rounded-full ${SERVICE_STATUS_DOT[service.status]}`}
-                            />
-                          </p>
-                          <p className="font-mono text-[10px] text-stone-500">
-                            {service.image.split('/').pop()}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void quickAct(service, canStart ? 'start' : 'stop');
-                        }}
-                        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
-                          canStart
-                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                            : 'border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
-                        }`}
-                        aria-label={canStart ? `Start ${service.label}` : `Stop ${service.label}`}
-                      >
-                        {busy ? (
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        ) : canStart ? (
-                          <Play className="h-3.5 w-3.5" />
-                        ) : (
-                          <Square className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    </div>
-                    <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">
-                      {service.description}
-                    </p>
-                  </div>
-                );
-              })}
+              {entries.map((service) => (
+                <CatalogServiceCard
+                  key={service.id}
+                  icon={SERVICE_ICON[service.id]}
+                  title={service.label}
+                  subtitle={service.image.split('/').pop() ?? service.image}
+                  description={service.description}
+                  service={service}
+                  busy={busyId === service.id}
+                  onOpen={() => setSelected(service.id)}
+                  onAct={(action: 'start' | 'stop') => void quickAct(service, action)}
+                />
+              ))}
             </div>
           </section>
         );
@@ -2210,7 +2299,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
     id: 'ingest',
     step: '01',
     title: 'Ingest & stream',
-    blurb: 'Move data in — event streams, flow-based routing, and stream processing at the edge of the lake.',
+    blurb: 'Move data in: event streams, flow-based routing, and stream processing at the edge of the lake.',
     items: [
       {
         id: 'kafka',
@@ -2224,7 +2313,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
         id: 'nifi',
         name: 'Iris',
         poweredBy: 'Apache NiFi',
-        role: 'Visual dataflow — route, transform and deliver between systems.',
+        role: 'Visual dataflow: route, transform and deliver between systems.',
         essential: false,
         deployable: true,
       },
@@ -2242,7 +2331,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
     id: 'store',
     step: '02',
     title: 'Store',
-    blurb: 'Land it durably — S3-compatible object storage and open table format on top.',
+    blurb: 'Land it durably: S3-compatible object storage and open table format on top.',
     items: [
       {
         id: 'ozone',
@@ -2256,7 +2345,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
         id: 'iceberg',
         name: 'Iceberg',
         poweredBy: 'Apache Iceberg',
-        role: 'Open table format — ACID, schema evolution, time travel.',
+        role: 'Open table format: ACID, schema evolution, time travel.',
         essential: true,
         deployable: true,
       },
@@ -2266,13 +2355,13 @@ const DATA_ENGINEERING: DataEngStage[] = [
     id: 'catalog',
     step: '03',
     title: 'Catalog & governance',
-    blurb: 'Know what you have — REST catalogs, metadata, lineage and data quality.',
+    blurb: 'Know what you have: REST catalogs, metadata, lineage and data quality.',
     items: [
       {
         id: 'polaris',
         name: 'Ariadne',
         poweredBy: 'Apache Polaris',
-        role: 'Iceberg REST catalog — the thread that guides engines to tables.',
+        role: 'Iceberg REST catalog: the thread that guides engines to tables.',
         essential: false,
         deployable: true,
       },
@@ -2288,7 +2377,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
         id: 'griffin',
         name: 'Griffin',
         poweredBy: 'Apache Griffin',
-        role: 'Data quality measurement — accuracy, completeness, timeliness.',
+        role: 'Data quality measurement: accuracy, completeness, timeliness.',
         essential: false,
         deployable: false,
       },
@@ -2298,7 +2387,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
     id: 'process',
     step: '04',
     title: 'Process',
-    blurb: 'Transform at scale — batch and micro-batch compute over the lake.',
+    blurb: 'Transform at scale: batch and micro-batch compute over the lake.',
     items: [
       {
         id: 'spark',
@@ -2330,7 +2419,7 @@ const DATA_ENGINEERING: DataEngStage[] = [
     id: 'query',
     step: '06',
     title: 'Query',
-    blurb: 'Serve answers — federated interactive SQL directly over lake tables.',
+    blurb: 'Serve answers: federated interactive SQL directly over lake tables.',
     items: [
       {
         id: 'trino',
@@ -2406,7 +2495,10 @@ function DataEngineeringPage({
     );
   }
 
-  const byId = new Map((services ?? []).map((entry) => [entry.id, entry]));
+  const byId = new Map<RealServiceId, RealServiceInfo>();
+  for (const entry of services ?? []) {
+    byId.set(entry.id, entry);
+  }
   const allItems = DATA_ENGINEERING.flatMap((stage) => stage.items);
   const runningCount = allItems.filter(
     (item) => item.deployable && byId.get(item.id as RealServiceId)?.status === 'running',
@@ -2416,7 +2508,6 @@ function DataEngineeringPage({
   return (
     <div className="space-y-8">
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-amber-500/[0.07] via-white/[0.03] to-transparent p-6">
-        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-amber-500/10 blur-3xl" />
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-xl">
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400/90">
@@ -2474,7 +2565,6 @@ function DataEngineeringPage({
               const Icon = item.deployable
                 ? SERVICE_ICON[item.id as RealServiceId]
                 : (DATA_ENG_ICON[item.id] ?? Archive);
-              const canStart = live ? live.status === 'stopped' || live.status === 'error' : false;
               const busy = live ? busyId === live.id : false;
               if (!item.deployable) {
                 return (
@@ -2503,70 +2593,26 @@ function DataEngineeringPage({
                 );
               }
               return (
-                <div
+                <CatalogServiceCard
                   key={item.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelected(item.id as RealServiceId)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      setSelected(item.id as RealServiceId);
-                    }
-                  }}
-                  className="group cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-amber-500/30 hover:bg-white/[0.05]"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-stone-300 transition group-hover:border-amber-500/30 group-hover:text-amber-200">
-                        <Icon className="h-4.5 w-4.5" />
+                  icon={Icon}
+                  title={item.name}
+                  subtitle={`powered by ${item.poweredBy}`}
+                  description={item.role}
+                  badge={
+                    item.essential ? (
+                      <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-300">
+                        Core
                       </span>
-                      <div>
-                        <p className="flex items-center gap-1.5 text-sm font-semibold text-stone-100">
-                          {item.name}
-                          {item.essential ? (
-                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-300">
-                              Core
-                            </span>
-                          ) : null}
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${SERVICE_STATUS_DOT[live?.status ?? 'stopped']}`}
-                          />
-                        </p>
-                        <p className="font-mono text-[10px] text-stone-500">
-                          powered by {item.poweredBy}
-                        </p>
-                      </div>
-                    </div>
-                    {live ? (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void quickAct(live, canStart ? 'start' : 'stop');
-                        }}
-                        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition disabled:opacity-50 ${
-                          canStart
-                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                            : 'border-white/10 bg-white/5 text-stone-400 hover:text-rose-300'
-                        }`}
-                        aria-label={canStart ? `Start ${item.name}` : `Stop ${item.name}`}
-                      >
-                        {busy ? (
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        ) : canStart ? (
-                          <Play className="h-3.5 w-3.5" />
-                        ) : (
-                          <Square className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    ) : null}
-                  </div>
-                  <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-stone-400">
-                    {item.role}
-                  </p>
-                </div>
+                    ) : undefined
+                  }
+                  service={live}
+                  busy={busy}
+                  onOpen={() => setSelected(item.id as RealServiceId)}
+                  onAct={
+                    live ? (action: 'start' | 'stop') => void quickAct(live, action) : undefined
+                  }
+                />
               );
             })}
           </div>
@@ -2574,6 +2620,69 @@ function DataEngineeringPage({
       ))}
     </div>
   );
+}
+
+/**
+ * Copy-paste connection command built from the live endpoint values. Broker
+ * CLIs prefer the in-cluster (non-https) endpoint; URL-based tools take the
+ * first endpoint as returned by the API. Never invents hosts.
+ */
+function buildConnectSnippet(
+  service: RealServiceId,
+  endpoints: { label: string; value: string }[],
+): string | null {
+  if (endpoints.length === 0) {
+    return null;
+  }
+  const first = endpoints[0].value;
+  const plain = endpoints.find((e) => !e.value.startsWith('https://'))?.value ?? first;
+  switch (service) {
+    case 'kafka':
+      return [
+        `kafka-console-producer --bootstrap-server ${plain} --topic demo`,
+        `kafka-console-consumer --bootstrap-server ${plain} --topic demo --from-beginning`,
+      ].join('\n');
+    case 'cassandra': {
+      const hostPort = plain.replace(/^[a-z0-9+.-]+:\/\//i, '');
+      const colon = hostPort.lastIndexOf(':');
+      const host = colon > 0 ? hostPort.slice(0, colon) : hostPort;
+      const port = colon > 0 ? hostPort.slice(colon + 1) : '';
+      return `cqlsh ${host}${port ? ` ${port}` : ''}`;
+    }
+    case 'couchdb':
+      return `curl ${first}`;
+    case 'solr':
+      return `curl "${first}/solr/admin/cores?action=STATUS"`;
+    case 'activemq':
+      return ['# point any AMQP 1.0 client at the broker', `export AMQP_URL=${plain}`].join('\n');
+    case 'zookeeper':
+      return `zkCli.sh -server ${plain}`;
+    case 'trino':
+      return `trino --server ${first} --execute "SHOW CATALOGS"`;
+    case 'ollama':
+      return `curl ${first}/api/generate -d '{"model":"<model>","prompt":"hello"}'`;
+    case 'spark':
+      return `spark-submit --master ${plain} app.py`;
+    case 'flink':
+      return `flink run -m ${plain} job.jar`;
+    case 'pulsar':
+      return `pulsar-client --url ${plain} produce demo -m "hello"`;
+    case 'iceberg':
+    case 'polaris':
+      return `curl ${first}/v1/config`;
+    case 'ozone':
+      return `aws s3 ls --endpoint-url ${first}`;
+    case 'jupyter':
+    case 'mlflow':
+    case 'airflow':
+    case 'nifi':
+    case 'tomcat':
+    case 'httpd':
+    case 'lgtm':
+      return `curl -I ${first}`;
+    default:
+      return `curl ${first}`;
+  }
 }
 
 function RealServiceView({
@@ -2590,6 +2699,7 @@ function RealServiceView({
   const [info, setInfo] = useState<RealServiceInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [stopArmed, setStopArmed] = useState(false);
   const [newName, setNewName] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const logConsole = useLogConsole();
@@ -2640,16 +2750,32 @@ function RealServiceView({
   };
 
   if (!info) {
+    if (error) {
+      return <p className="text-sm text-stone-500">error: {error}</p>;
+    }
     return (
-      <p className="text-sm text-stone-500">{error ? `error: ${error}` : 'loading service…'}</p>
+      <div className="py-6">
+        <BrandLoader size="sm" label="Loading service" />
+      </div>
     );
   }
 
   const status = info.status;
   const canStart = status === 'stopped' || status === 'error';
+  const snippet = status === 'running' ? buildConnectSnippet(service, info.endpoints) : null;
+  // two-tap stop: first tap arms the button, second tap stops; disarms after 4s
+  const requestStop = () => {
+    if (!stopArmed) {
+      setStopArmed(true);
+      setTimeout(() => setStopArmed(false), 4000);
+      return;
+    }
+    setStopArmed(false);
+    void act('stop');
+  };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <button
         type="button"
         onClick={onBack}
@@ -2682,8 +2808,14 @@ function RealServiceView({
               <Play className="h-3.5 w-3.5" /> Start
             </PrimaryButton>
           ) : (
-            <GhostButton onClick={() => act('stop')} disabled={busy}>
-              <Square className="h-3.5 w-3.5" /> Stop
+            <GhostButton
+              onClick={requestStop}
+              disabled={busy}
+              className={
+                stopArmed ? 'border-rose-400/40 bg-rose-500/10 text-rose-200 hover:border-rose-400/60' : ''
+              }
+            >
+              <Square className="h-3.5 w-3.5" /> {stopArmed ? 'Confirm?' : 'Stop'}
             </GhostButton>
           )}
         </div>
@@ -2705,7 +2837,7 @@ function RealServiceView({
       {info.endpoints.length > 0 ? (
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
-            Endpoints
+            {status === 'running' ? 'Connect' : 'Endpoints'}
           </h3>
           <div className="mt-2 space-y-2">
             {[...info.endpoints]
@@ -2720,7 +2852,9 @@ function RealServiceView({
                 className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5"
               >
                 <div className="min-w-0">
-                  <p className="text-xs text-stone-500">{endpoint.label}</p>
+                  <p className="text-[10px] uppercase tracking-widest text-stone-500">
+                    {endpoint.label}
+                  </p>
                   {endpoint.value.startsWith('https://') ? (
                     <a
                       href={endpoint.value}
@@ -2738,6 +2872,19 @@ function RealServiceView({
               </div>
             ))}
           </div>
+          {snippet ? (
+            <>
+              <div className="relative mt-3">
+                <pre className="overflow-x-auto rounded-xl border border-white/10 bg-black/40 p-4 font-mono text-xs leading-relaxed text-stone-200">
+                  {snippet}
+                </pre>
+                <CopyButton value={snippet} className="absolute right-2 top-2 bg-stone-900/80" />
+              </div>
+              <p className="mt-1.5 text-[11px] text-stone-600">
+                In-cluster hostnames resolve from workloads running inside the workspace network.
+              </p>
+            </>
+          ) : null}
         </section>
       ) : null}
 
@@ -2872,12 +3019,19 @@ function RealServiceView({
             </section>
 
             {selectedInst ? (
-              <ServicePanel
-                key={`${instance}/${selectedInst.serviceName}`}
-                instance={instance}
-                target={selectedInst.serviceName}
-                label={`${info.label} / ${selectedInst.name ?? 'default'}`}
-              />
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
+                  Configure &amp; exec
+                </h3>
+                <div className="mt-2">
+                  <ServicePanel
+                    key={`${instance}/${selectedInst.serviceName}`}
+                    instance={instance}
+                    target={selectedInst.serviceName}
+                    label={`${info.label} / ${selectedInst.name ?? 'default'}`}
+                  />
+                </div>
+              </section>
             ) : null}
 
             {selectedInst ? <InlineLogTerminal instance={instance} /> : null}
@@ -2888,8 +3042,18 @@ function RealServiceView({
   );
 }
 
-const SERVICE_META: Record<
+/**
+ * Sections that still render through the generic ServiceView. The rest
+ * (ec2, ecs, rds, elasticache, route53, apigw, ecr) are intercepted by
+ * dedicated pages in Console before ServiceView is ever reached.
+ */
+type EmulatedServiceId = Exclude<
   ServiceId,
+  'ec2' | 'ecs' | 'rds' | 'elasticache' | 'route53' | 'apigw' | 'ecr'
+>;
+
+const SERVICE_META: Record<
+  EmulatedServiceId,
   { title: string; noun: string; placeholder: string; hint?: string }
 > = {
   s3: { title: 'Buckets', noun: 'bucket', placeholder: 'bucket name' },
@@ -2900,12 +3064,6 @@ const SERVICE_META: Record<
     noun: 'table',
     placeholder: 'table name',
     hint: 'partition key "id" (string), on-demand billing',
-  },
-  ec2: {
-    title: 'Servers',
-    noun: 'server',
-    placeholder: 'server name',
-    hint: 't3.micro container-backed instance',
   },
   lambda: { title: 'Functions', noun: 'function', placeholder: 'function name' },
   secrets: { title: 'Secrets', noun: 'secret', placeholder: 'secret name' },
@@ -2951,35 +3109,17 @@ const SERVICE_META: Record<
     placeholder: 'stream name',
     hint: 'created with 1 shard',
   },
-  apigw: {
-    title: 'API Gateway',
-    noun: 'API',
-    placeholder: 'api name',
-    hint: 'HTTP APIs (API Gateway v2)',
-  },
   cognito: {
     title: 'User pools',
     noun: 'user pool',
     placeholder: 'pool name',
     hint: 'Cognito user pools and users',
   },
-  route53: {
-    title: 'Hosted zones',
-    noun: 'hosted zone',
-    placeholder: 'example.com',
-    hint: 'public DNS zones and records',
-  },
   cloudformation: {
     title: 'Stacks',
     noun: 'stack',
     placeholder: 'stack name',
     hint: 'CloudFormation (JSON template)',
-  },
-  ecr: {
-    title: 'Container registry',
-    noun: 'repository',
-    placeholder: 'repository name',
-    hint: 'ECR docker repositories',
   },
   ses: {
     title: 'Email identities',
@@ -2993,18 +3133,6 @@ const SERVICE_META: Record<
     placeholder: 'schedule name',
     hint: 'EventBridge Scheduler',
   },
-  rds: {
-    title: 'Databases (RDS)',
-    noun: 'database',
-    placeholder: 'db identifier',
-    hint: 'db.t3.micro · master user "admin" / "password123"',
-  },
-  ecs: {
-    title: 'ECS clusters',
-    noun: 'cluster',
-    placeholder: 'cluster name',
-    hint: 'Elastic Container Service clusters',
-  },
   athena: {
     title: 'Athena SQL',
     noun: 'workgroup',
@@ -3016,12 +3144,6 @@ const SERVICE_META: Record<
     noun: 'database',
     placeholder: 'database_name',
     hint: 'Glue Data Catalog databases and tables',
-  },
-  elasticache: {
-    title: 'Cache clusters',
-    noun: 'cache cluster',
-    placeholder: 'cluster id',
-    hint: 'memcached · cache.t3.micro · 1 node',
   },
   firehose: {
     title: 'Firehose',
@@ -3037,7 +3159,7 @@ function ServiceView({
   notify,
 }: {
   instance: string;
-  service: ServiceId;
+  service: EmulatedServiceId;
   notify: (message: string, tone?: 'ok' | 'err') => void;
 }) {
   const meta = SERVICE_META[service];
@@ -3055,7 +3177,6 @@ function ServiceView({
   const [iamKind, setIamKind] = useState('user');
   const [aslCode, setAslCode] = useState(ASL_TEMPLATE);
   const [cfnCode, setCfnCode] = useState(CFN_TEMPLATE);
-  const [rdsEngine, setRdsEngine] = useState('postgres');
 
   const refresh = useCallback(() => {
     setError('');
@@ -3069,7 +3190,7 @@ function ServiceView({
 
   useEffect(() => {
     refresh();
-    if (service !== 'lambda' && service !== 'ec2') {
+    if (service !== 'lambda') {
       return;
     }
     const timer = setInterval(refresh, 8000);
@@ -3091,7 +3212,6 @@ function ServiceView({
         ? { value: secretValue }
         : {}),
       ...(service === 'iam' ? { value: iamKind } : {}),
-      ...(service === 'rds' ? { value: rdsEngine } : {}),
       ...(service === 'lambda' ? { runtime, code } : {}),
       ...(service === 'states' ? { code: aslCode } : {}),
       ...(service === 'cloudformation' ? { code: cfnCode } : {}),
@@ -3172,17 +3292,6 @@ function ServiceView({
                 <option value="user">user</option>
                 <option value="role">role</option>
                 <option value="policy">policy</option>
-              </select>
-            ) : null}
-            {service === 'rds' ? (
-              <select
-                value={rdsEngine}
-                onChange={(event) => setRdsEngine(event.target.value)}
-                className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-sm text-stone-200 outline-none"
-              >
-                <option value="postgres">postgres</option>
-                <option value="mysql">mysql</option>
-                <option value="mariadb">mariadb</option>
               </select>
             ) : null}
             <PrimaryButton type="submit" disabled={busy} className="px-3 py-1.5 text-xs">
@@ -3309,7 +3418,7 @@ function ServiceView({
 
 function ResourceDetail(props: {
   instance: string;
-  service: ServiceId;
+  service: EmulatedServiceId;
   item: ResourceItem;
   notify: (message: string, tone?: 'ok' | 'err') => void;
   refresh: () => void;
@@ -3323,8 +3432,6 @@ function ResourceDetail(props: {
       return <TopicActions {...props} />;
     case 'dynamodb':
       return <TableItems {...props} />;
-    case 'ec2':
-      return <ServerActions {...props} />;
     case 'lambda':
       return <FunctionActions {...props} />;
     case 'secrets':
@@ -3343,30 +3450,18 @@ function ResourceDetail(props: {
       return <StateMachineActions {...props} />;
     case 'kinesis':
       return <StreamActions {...props} />;
-    case 'apigw':
-      return <ApiActions {...props} />;
     case 'cognito':
       return <UserPoolActions {...props} />;
-    case 'route53':
-      return <ZoneActions {...props} />;
     case 'cloudformation':
       return <StackActions {...props} />;
-    case 'ecr':
-      return <RepoImages {...props} />;
     case 'ses':
       return <EmailActions {...props} />;
     case 'scheduler':
       return <ScheduleActions {...props} />;
-    case 'rds':
-      return <RdsActions {...props} />;
-    case 'ecs':
-      return <EcsActions {...props} />;
     case 'athena':
       return <AthenaQuery {...props} />;
     case 'glue':
       return <GlueTables {...props} />;
-    case 'elasticache':
-      return <CacheActions {...props} />;
     case 'firehose':
       return <FirehoseActions {...props} />;
   }
@@ -3788,37 +3883,66 @@ function TableItems({ instance, item, notify }: DetailProps) {
       ) : items.length === 0 ? (
         <p className="text-xs text-stone-500">table is empty</p>
       ) : (
-        <ResultBox>{JSON.stringify(items, null, 2)}</ResultBox>
+        (() => {
+          // column set = union of item keys, capped so wide items stay readable
+          const columns: string[] = [];
+          for (const row of items) {
+            for (const key of Object.keys(row)) {
+              if (!columns.includes(key)) {
+                columns.push(key);
+              }
+            }
+          }
+          const shown = columns.slice(0, 6);
+          const hiddenCount = columns.length - shown.length;
+          const cell = (value: unknown): string =>
+            value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value);
+          return (
+            <div className="space-y-2">
+              <div className="overflow-auto rounded-lg border border-white/10">
+                <table className="w-full text-left font-mono text-xs">
+                  <thead className="bg-white/[0.04] text-stone-400">
+                    <tr>
+                      {shown.map((column) => (
+                        <th key={column} className="px-3 py-1.5 font-medium">
+                          {column}
+                        </th>
+                      ))}
+                      {hiddenCount > 0 ? (
+                        <th className="px-3 py-1.5 font-medium">
+                          <span className="rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-stone-500">
+                            +{hiddenCount} more
+                          </span>
+                        </th>
+                      ) : null}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 text-stone-200">
+                    {items.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {shown.map((column) => (
+                          <td key={column} className="max-w-48 truncate px-3 py-1.5">
+                            {cell(row[column])}
+                          </td>
+                        ))}
+                        {hiddenCount > 0 ? <td className="px-3 py-1.5 text-stone-600">…</td> : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <details>
+                <summary className="cursor-pointer text-[11px] text-stone-500 transition hover:text-stone-300">
+                  raw JSON
+                </summary>
+                <div className="mt-1.5">
+                  <ResultBox>{JSON.stringify(items, null, 2)}</ResultBox>
+                </div>
+              </details>
+            </div>
+          );
+        })()
       )}
-    </div>
-  );
-}
-
-function ServerActions({ instance, item, notify, refresh }: DetailProps) {
-  const region = useRegion();
-  const [error, setError] = useState('');
-  const run = (action: 'start' | 'stop') => {
-    setError('');
-    actOnResource(instance, 'ec2', region, item.id, action)
-      .then(() => {
-        notify(`server ${action} requested`);
-        setTimeout(refresh, 1200);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : `${action} failed`));
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="flex gap-2">
-        <GhostButton onClick={() => run('start')}>
-          <Play className="h-3.5 w-3.5" /> Start
-        </GhostButton>
-        <GhostButton onClick={() => run('stop')}>
-          <Square className="h-3.5 w-3.5" /> Stop
-        </GhostButton>
-        <span className="self-center font-mono text-xs text-stone-500">{item.id}</span>
-      </div>
-      <ActionError message={error} />
     </div>
   );
 }
@@ -4106,11 +4230,15 @@ function LogGroupActions({ instance, item }: DetailProps) {
         events.length === 0 ? (
           <p className="text-xs text-stone-500">no log events yet</p>
         ) : (
-          <ResultBox>
-            {events
-              .map((event) => `${event.timestamp ?? ''}  [${event.stream ?? ''}]  ${event.message ?? ''}`)
-              .join('\n')}
-          </ResultBox>
+          <div className="max-h-72 overflow-auto rounded-xl border border-white/10 bg-black/40 p-3 font-mono text-[11px] leading-relaxed">
+            {events.map((event, index) => (
+              <div key={index} className="flex items-baseline gap-2">
+                <span className="shrink-0 text-stone-600">{event.timestamp ?? ''}</span>
+                <span className="shrink-0 text-stone-500">[{event.stream ?? ''}]</span>
+                <span className="min-w-0 break-all text-stone-200">{event.message ?? ''}</span>
+              </div>
+            ))}
+          </div>
         )
       ) : null}
     </div>
@@ -4248,7 +4376,9 @@ function StateMachineActions({ instance, item, notify }: DetailProps) {
   const [executions, setExecutions] = useState<
     { arn?: string; name?: string; status?: string; started?: string; stopped?: string | null }[] | null
   >(null);
-  const [output, setOutput] = useState('');
+  const [execDetail, setExecDetail] = useState<{ status?: string; output?: string | null } | null>(
+    null,
+  );
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
@@ -4287,7 +4417,7 @@ function StateMachineActions({ instance, item, notify }: DetailProps) {
       'describeExecution',
       { arn },
     )
-      .then((data) => setOutput(`${data.result.status}: ${data.result.output ?? '(no output)'}`))
+      .then((data) => setExecDetail(data.result))
       .catch((err) => setError(err instanceof Error ? err.message : 'describe failed'));
   };
 
@@ -4308,7 +4438,27 @@ function StateMachineActions({ instance, item, notify }: DetailProps) {
         </GhostButton>
       </form>
       <ActionError message={error} />
-      {output ? <p className="font-mono text-xs text-emerald-300">{output}</p> : null}
+      {execDetail ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-stone-600">
+              Execution output
+            </span>
+            <span
+              className={`rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] ${
+                execDetail.status === 'SUCCEEDED'
+                  ? 'bg-emerald-500/10 text-emerald-300'
+                  : execDetail.status === 'FAILED'
+                    ? 'bg-rose-500/10 text-rose-300'
+                    : 'bg-amber-500/10 text-amber-200'
+              }`}
+            >
+              {execDetail.status?.toLowerCase()}
+            </span>
+          </div>
+          <ResultBox>{execDetail.output ? formatPayload(execDetail.output) : '(no output)'}</ResultBox>
+        </div>
+      ) : null}
       {executions === null ? (
         <p className="text-xs text-stone-500">loading executions…</p>
       ) : executions.length === 0 ? (
@@ -4429,77 +4579,6 @@ function StreamActions({ instance, item, notify }: DetailProps) {
   );
 }
 
-function ApiActions({ instance, item, notify }: DetailProps) {
-  const region = useRegion();
-  const [routes, setRoutes] = useState<{ id?: string; key?: string; target?: string | null }[] | null>(null);
-  const [routeKey, setRouteKey] = useState('');
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<{ routes: { id?: string; key?: string; target?: string | null }[] }>(
-      instance,
-      'apigw', region,
-      item.id,
-      'routes',
-    )
-      .then((data) => setRoutes(data.result.routes))
-      .catch((err) => setError(err instanceof Error ? err.message : 'failed to list routes'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const addRoute = (event: FormEvent) => {
-    event.preventDefault();
-    setError('');
-    actOnResource(instance, 'apigw', region, item.id, 'addRoute', {
-      routeKey: routeKey.trim() || 'GET /',
-    })
-      .then(() => {
-        notify('route added');
-        setRouteKey('');
-        load();
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'add route failed'));
-  };
-
-  return (
-    <div className="space-y-3">
-      <form onSubmit={addRoute} className="flex flex-wrap gap-2">
-        <input
-          value={routeKey}
-          onChange={(event) => setRouteKey(event.target.value)}
-          placeholder="GET /orders"
-          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
-        />
-        <GhostButton type="submit">
-          <Plus className="h-3.5 w-3.5" /> Add route
-        </GhostButton>
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </GhostButton>
-      </form>
-      <ActionError message={error} />
-      {routes === null ? (
-        <p className="text-xs text-stone-500">loading routes…</p>
-      ) : routes.length === 0 ? (
-        <p className="text-xs text-stone-500">no routes yet</p>
-      ) : (
-        <ul className="divide-y divide-white/5 rounded-lg border border-white/10">
-          {routes.map((route) => (
-            <li key={route.id} className="flex items-center gap-2 px-3 py-1.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">{route.key}</span>
-              <span className="truncate text-[10px] text-stone-500">{route.target ?? 'no integration'}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 function UserPoolActions({ instance, item, notify }: DetailProps) {
   const region = useRegion();
   const [users, setUsers] = useState<
@@ -4596,107 +4675,6 @@ function UserPoolActions({ instance, item, notify }: DetailProps) {
   );
 }
 
-function ZoneActions({ instance, item, notify }: DetailProps) {
-  const region = useRegion();
-  const [records, setRecords] = useState<
-    { name?: string; type?: string; ttl?: number | null; values?: string[] }[] | null
-  >(null);
-  const [recordName, setRecordName] = useState('');
-  const [recordType, setRecordType] = useState('A');
-  const [recordValue, setRecordValue] = useState('');
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<{
-      records: { name?: string; type?: string; ttl?: number | null; values?: string[] }[];
-    }>(instance, 'route53', region, item.id, 'records')
-      .then((data) => setRecords(data.result.records))
-      .catch((err) => setError(err instanceof Error ? err.message : 'failed to list records'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const upsert = (event: FormEvent) => {
-    event.preventDefault();
-    const trimmed = recordName.trim();
-    if (!trimmed) {
-      return;
-    }
-    setError('');
-    actOnResource(instance, 'route53', region, item.id, 'upsertRecord', {
-      recordName: trimmed,
-      type: recordType,
-      value: recordValue.trim() || '127.0.0.1',
-    })
-      .then(() => {
-        notify(`record ${trimmed} saved`);
-        setRecordName('');
-        setRecordValue('');
-        load();
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'upsert failed'));
-  };
-
-  return (
-    <div className="space-y-3">
-      <form onSubmit={upsert} className="flex flex-wrap gap-2">
-        <input
-          value={recordName}
-          onChange={(event) => setRecordName(event.target.value)}
-          placeholder={`app.${item.name.replace(/\.$/, '')}`}
-          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
-        />
-        <select
-          value={recordType}
-          onChange={(event) => setRecordType(event.target.value)}
-          className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-stone-200 outline-none"
-        >
-          <option value="A">A</option>
-          <option value="AAAA">AAAA</option>
-          <option value="CNAME">CNAME</option>
-          <option value="TXT">TXT</option>
-          <option value="MX">MX</option>
-        </select>
-        <input
-          value={recordValue}
-          onChange={(event) => setRecordValue(event.target.value)}
-          placeholder="value"
-          className="w-36 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 font-mono text-xs text-stone-100 outline-none focus:border-amber-400/50"
-        />
-        <GhostButton type="submit">
-          <Plus className="h-3.5 w-3.5" /> Upsert
-        </GhostButton>
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </GhostButton>
-      </form>
-      <ActionError message={error} />
-      {records === null ? (
-        <p className="text-xs text-stone-500">loading records…</p>
-      ) : records.length === 0 ? (
-        <p className="text-xs text-stone-500">no records</p>
-      ) : (
-        <ul className="divide-y divide-white/5 rounded-lg border border-white/10">
-          {records.map((record, index) => (
-            <li key={index} className="flex items-center gap-2 px-3 py-1.5">
-              <span className="w-14 font-mono text-[10px] text-amber-200/80">{record.type}</span>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">
-                {record.name}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-right font-mono text-[10px] text-stone-500">
-                {(record.values ?? []).join(', ')}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 function StackActions({ instance, item }: DetailProps) {
   const region = useRegion();
   const [status, setStatus] = useState('');
@@ -4777,66 +4755,39 @@ function StackActions({ instance, item }: DetailProps) {
         </ul>
       )}
       {events !== null ? (
-        <ResultBox>
-          {events
-            .map((event) => `${event.at ?? ''}  ${event.status ?? ''}  ${event.logicalId ?? ''}${event.reason ? ` — ${event.reason}` : ''}`)
-            .join('\n') || 'no events'}
-        </ResultBox>
+        events.length === 0 ? (
+          <p className="text-xs text-stone-500">no events</p>
+        ) : (
+          <ul className="divide-y divide-white/5 rounded-lg border border-white/10">
+            {events.map((event, index) => (
+              <li key={index} className="flex items-center gap-2 px-3 py-1.5">
+                <span className="w-40 shrink-0 truncate font-mono text-[10px] text-stone-600">
+                  {event.at ?? ''}
+                </span>
+                <span
+                  className={`shrink-0 rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] ${
+                    event.status?.includes('FAILED') || event.status?.startsWith('ROLLBACK')
+                      ? 'bg-rose-500/10 text-rose-300'
+                      : event.status?.endsWith('COMPLETE')
+                        ? 'bg-emerald-500/10 text-emerald-300'
+                        : 'bg-amber-500/10 text-amber-200'
+                  }`}
+                >
+                  {event.status?.toLowerCase()}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">
+                  {event.logicalId ?? ''}
+                </span>
+                {event.reason ? (
+                  <span className="min-w-0 max-w-64 truncate text-[10px] text-stone-500" title={event.reason}>
+                    {event.reason}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )
       ) : null}
-    </div>
-  );
-}
-
-function RepoImages({ instance, item }: DetailProps) {
-  const region = useRegion();
-  const [images, setImages] = useState<
-    { tags?: string[]; digest?: string; sizeBytes?: number | null; pushed?: string }[] | null
-  >(null);
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<{
-      images: { tags?: string[]; digest?: string; sizeBytes?: number | null; pushed?: string }[];
-    }>(instance, 'ecr', region, item.id, 'images')
-      .then((data) => setImages(data.result.images))
-      .catch((err) => setError(err instanceof Error ? err.message : 'failed to list images'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {item.detail ? <CopyButton value={item.detail} label="Copy URI" /> : null}
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </GhostButton>
-      </div>
-      <ActionError message={error} />
-      {images === null ? (
-        <p className="text-xs text-stone-500">loading images…</p>
-      ) : images.length === 0 ? (
-        <p className="text-xs text-stone-500">no images pushed — docker push {item.detail ?? 'the repository URI'}</p>
-      ) : (
-        <ul className="divide-y divide-white/5 rounded-lg border border-white/10">
-          {images.map((image) => (
-            <li key={image.digest} className="flex items-center gap-2 px-3 py-1.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-200">
-                {(image.tags ?? []).join(', ') || 'untagged'}
-              </span>
-              <span className="truncate font-mono text-[10px] text-stone-500">
-                {image.digest?.slice(0, 19)}
-              </span>
-              <span className="text-[10px] text-stone-500">
-                {image.pushed ? timeAgo(image.pushed) : ''}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
@@ -4949,108 +4900,6 @@ function ScheduleActions({ instance, item }: DetailProps) {
           <p className="truncate">
             <span className="text-stone-500">target </span>
             {detail.target ?? 'none'}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RdsActions({ instance, item }: DetailProps) {
-  const region = useRegion();
-  const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<Record<string, unknown>>(instance, 'rds', region, item.id, 'describe')
-      .then((data) => setDetail(data.result))
-      .catch((err) => setError(err instanceof Error ? err.message : 'describe failed'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </GhostButton>
-      </div>
-      <ActionError message={error} />
-      {detail === null ? (
-        <p className="text-xs text-stone-500">loading…</p>
-      ) : (
-        <div className="space-y-1 font-mono text-xs text-stone-300">
-          {(['engine', 'class', 'status', 'endpoint', 'username', 'storageGb'] as const).map((field) => (
-            <p key={field} className="truncate">
-              <span className="text-stone-500">{field} </span>
-              {String(detail[field] ?? '—')}
-            </p>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EcsActions({ instance, item }: DetailProps) {
-  const region = useRegion();
-  const [detail, setDetail] = useState<{
-    status?: string;
-    runningTasks?: number;
-    pendingTasks?: number;
-    services?: string[];
-    tasks?: string[];
-  } | null>(null);
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<{
-      status?: string;
-      runningTasks?: number;
-      pendingTasks?: number;
-      services?: string[];
-      tasks?: string[];
-    }>(instance, 'ecs', region, item.id, 'describe')
-      .then((data) => setDetail(data.result))
-      .catch((err) => setError(err instanceof Error ? err.message : 'describe failed'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </GhostButton>
-      </div>
-      <ActionError message={error} />
-      {detail === null ? (
-        <p className="text-xs text-stone-500">loading…</p>
-      ) : (
-        <div className="space-y-1 font-mono text-xs text-stone-300">
-          <p>
-            <span className="text-stone-500">status </span>
-            {detail.status?.toLowerCase() ?? '—'}
-          </p>
-          <p>
-            <span className="text-stone-500">tasks </span>
-            {detail.runningTasks ?? 0} running · {detail.pendingTasks ?? 0} pending
-          </p>
-          <p className="truncate">
-            <span className="text-stone-500">services </span>
-            {detail.services?.length ? detail.services.join(', ') : 'none'}
-          </p>
-          <p className="truncate">
-            <span className="text-stone-500">task list </span>
-            {detail.tasks?.length ? detail.tasks.join(', ') : 'none'}
           </p>
         </div>
       )}
@@ -5217,66 +5066,6 @@ function GlueTables({ instance, item }: DetailProps) {
   );
 }
 
-function CacheActions({ instance, item }: DetailProps) {
-  const region = useRegion();
-  const [detail, setDetail] = useState<{
-    engine?: string;
-    nodeType?: string;
-    status?: string;
-    nodes?: string[];
-  } | null>(null);
-  const [error, setError] = useState('');
-
-  const load = useCallback(() => {
-    setError('');
-    actOnResource<{ engine?: string; nodeType?: string; status?: string; nodes?: string[] }>(
-      instance,
-      'elasticache', region,
-      item.id,
-      'describe',
-    )
-      .then((data) => setDetail(data.result))
-      .catch((err) => setError(err instanceof Error ? err.message : 'describe failed'));
-  }, [instance, region, item.id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <GhostButton type="button" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </GhostButton>
-      </div>
-      <ActionError message={error} />
-      {detail === null ? (
-        <p className="text-xs text-stone-500">loading…</p>
-      ) : (
-        <div className="space-y-1 font-mono text-xs text-stone-300">
-          <p>
-            <span className="text-stone-500">engine </span>
-            {detail.engine ?? '—'}
-          </p>
-          <p>
-            <span className="text-stone-500">node type </span>
-            {detail.nodeType ?? '—'}
-          </p>
-          <p>
-            <span className="text-stone-500">status </span>
-            {detail.status ?? '—'}
-          </p>
-          <p className="truncate">
-            <span className="text-stone-500">endpoints </span>
-            {detail.nodes?.length ? detail.nodes.join(', ') : 'none yet'}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function FirehoseActions({ instance, item, notify }: DetailProps) {
   const region = useRegion();
   const [detail, setDetail] = useState<{
@@ -5428,30 +5217,34 @@ function ApiExplorerView({ instance }: { instance: string }) {
   return (
     <section className="mt-8">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-medium text-stone-100">API Explorer</h2>
+        <h2 className="font-display text-lg font-bold tracking-tight">API Explorer</h2>
       </div>
       <p className="mt-1 text-sm text-stone-500">
-        Call any of the {services.length} AWS APIs on this instance — raw request, raw response.
+        Call any of the {services.length} AWS APIs on this instance. Raw request, raw response.
       </p>
 
       <form onSubmit={send} className="mt-6 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={serviceId}
-            onChange={(e) => pickService(e.target.value)}
-            className="rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-xs text-stone-200 outline-none focus:border-emerald-500/50"
-          >
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.id}
-              </option>
-            ))}
-          </select>
+          {services.length === 0 ? (
+            <div className="h-8 w-44 animate-pulse rounded-lg border border-white/10 bg-white/[0.03]" />
+          ) : (
+            <select
+              value={serviceId}
+              onChange={(e: { target: { value: string } }) => pickService(e.target.value)}
+              className="rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-xs text-stone-200 outline-none transition focus:border-amber-400/50"
+            >
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.id}
+                </option>
+              ))}
+            </select>
+          )}
           <input
             value={operation}
-            onChange={(e) => setOperation(e.target.value)}
+            onChange={(e: { target: { value: string } }) => setOperation(e.target.value)}
             placeholder={selected?.sampleOp || 'Operation or METHOD /path'}
-            className="min-w-64 flex-1 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-xs text-stone-200 outline-none placeholder:text-stone-600 focus:border-emerald-500/50"
+            className="min-w-64 flex-1 rounded-lg border border-white/10 bg-stone-900 px-3 py-2 font-mono text-xs text-stone-200 outline-none placeholder:text-stone-600 transition focus:border-amber-400/50"
           />
           <PrimaryButton type="submit" disabled={busy || !operation.trim()}>
             <Send className="h-3.5 w-3.5" /> {busy ? 'Calling…' : 'Send'}
@@ -5460,25 +5253,35 @@ function ApiExplorerView({ instance }: { instance: string }) {
         <p className="font-mono text-[11px] text-stone-600">{protoHint}</p>
         <textarea
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e: { target: { value: string } }) => setBody(e.target.value)}
           rows={5}
           spellCheck={false}
           placeholder="request body"
-          className="w-full rounded-lg border border-white/10 bg-stone-950 p-3 font-mono text-xs text-stone-300 outline-none placeholder:text-stone-700 focus:border-emerald-500/50"
+          className="w-full rounded-lg border border-white/10 bg-stone-950 p-3 font-mono text-xs text-stone-300 outline-none placeholder:text-stone-700 transition focus:border-amber-400/50"
         />
       </form>
 
       {error ? <p className="mt-3 text-xs text-rose-400">{error}</p> : null}
 
       {result ? (
-        <div className="mt-4 rounded-xl border border-white/10 bg-stone-950/60 p-4">
-          <div className="flex items-center gap-3 font-mono text-xs">
-            <span className={result.status < 400 ? 'text-emerald-300' : 'text-rose-300'}>
+        <div className="mt-4">
+          <div className="flex items-center gap-2">
+            <span
+              className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                result.status < 300
+                  ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
+                  : result.status < 500
+                    ? 'border-amber-400/30 bg-amber-500/10 text-amber-200'
+                    : 'border-rose-400/30 bg-rose-500/10 text-rose-300'
+              }`}
+            >
               HTTP {result.status}
             </span>
-            <span className="text-stone-600">{result.contentType || 'no content-type'}</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-stone-500">
+              {result.contentType || 'no content-type'}
+            </span>
           </div>
-          <pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-stone-300">
+          <pre className="mt-2 max-h-[32rem] overflow-auto whitespace-pre-wrap break-all rounded-xl border border-white/10 bg-black/40 p-4 font-mono text-xs leading-relaxed text-stone-200">
             {prettyBody || '(empty response)'}
           </pre>
         </div>
