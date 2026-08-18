@@ -438,7 +438,13 @@ export class SwarmDriver implements CloudDriver {
       TaskTemplate: {
         ContainerSpec: {
           Image: this.opts.flociImage,
-          Env: [`FLOCI_BASE_URL=${this.scheme()}://${this.hostFor(name)}`],
+          Env: [
+            `FLOCI_BASE_URL=${this.scheme()}://${this.hostFor(name)}`,
+            // Lambda runtime containers are plain containers on the node's
+            // docker daemon; without this they land on the default bridge and
+            // can never reach the emulator's Runtime API on the overlay IP.
+            `FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK=${NETWORK_NAME}`,
+          ],
           Mounts: [
             {
               Type: 'bind',
