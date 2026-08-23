@@ -51,15 +51,10 @@ jobs:
         env:
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2ktcGxhY2Vob2xkZXIuZXhhbXBsZS5jb20k
 
-  emulator-integration:
-    name: emulator-integration
+  swarm-auth-e2e:
+    name: swarm-auth-e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      floci:
-        image: floci/floci:latest
-        ports:
-          - 4566:4566
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -67,14 +62,47 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: api/package-lock.json
+      - name: init docker swarm
+        run: docker swarm init
       - name: install api deps
         run: npm ci
         working-directory: api
-      - name: ResourceGateway + Explorer against real floci
-        run: node --test --test-reporter spec tests/resources.test.ts
+      - name: start API (clerk mode + FLOCI_CLOUD_TOKEN backdoor)
         working-directory: api
         env:
-          FLOCI_ENDPOINT: http://127.0.0.1:4566
+          DRIVER: swarm
+          INSTANCE_DOMAIN: localhost
+          PORT: '8080'
+          CLERK_SECRET_KEY: ${{ secrets.CI_CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CI_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          FLOCI_CLOUD_TOKEN="${{ secrets.CI_FLOCI_CLOUD_TOKEN }}"
+          echo "FLOCI_CLOUD_TOKEN=$FLOCI_CLOUD_TOKEN" >> "$GITHUB_ENV"
+          FLOCI_CLOUD_TOKEN=$FLOCI_CLOUD_TOKEN nohup npm start > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/healthz > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8080/healthz > /dev/null
+      - name: assert authMode is clerk (people still see Clerk)
+        run: |
+          mode=$(curl -sf http://127.0.0.1:8080/api/public/config | node -pe 'JSON.parse(require("fs").readFileSync(0)).authMode')
+          test "$mode" = "clerk"
+      - name: assert unauthenticated request is rejected
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/instances)
+          test "$code" = "401"
+      - name: assert FLOCI_CLOUD_TOKEN backdoor grants access
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${FLOCI_CLOUD_TOKEN}" http://127.0.0.1:8080/api/instances)
+          test "$code" = "200"
+      - name: api logs
+        if: always()
+        run: cat /tmp/api.log || true
+      - name: stop API
+        if: always()
+        run: kill "$(cat /tmp/api.pid)" 2>/dev/null || true
 
   kind-e2e:
     name: kind-e2e
