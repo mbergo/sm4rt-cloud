@@ -17,11 +17,18 @@ test('a workspace subdomain defers to an instance lookup', () => {
 });
 
 test('a catalog service host resolves to its workspace', () => {
-  // only services with an http UI get their own host, so the suffix is
-  // stripped to find the workspace that owns them
+  // services with an http UI get their own host, so the suffix is stripped to
+  // find the workspace that owns them
   assert.deepEqual(ask(`demo-airflow.${DOMAIN}`), { allowed: false, instance: 'demo' });
-  // a service without an http UI is not a suffix, so the whole label is the name
-  assert.deepEqual(ask(`demo-kafka.${DOMAIN}`), { allowed: false, instance: 'demo-kafka' });
+});
+
+test('a hyphenated name that is not a service stays whole', () => {
+  // deliberately not a catalog id: asserting against a real service would tie
+  // this test to whether that service happens to expose a UI today
+  assert.deepEqual(ask(`demo-not-a-service.${DOMAIN}`), {
+    allowed: false,
+    instance: 'demo-not-a-service',
+  });
 });
 
 test('hosts outside the instance domain are refused', () => {
