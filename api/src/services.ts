@@ -188,7 +188,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     description: 'Apache Cassandra 5.0 single-node cluster.',
     image: 'cassandra:5.0',
     category: 'data',
-    ports: [{ name: 'cql', port: 9042 }],
+    ports: [
+      { name: 'cql', port: 9042 },
+      { name: 'http', port: 3000 },
+    ],
     probePort: 9042,
     startupSeconds: 300,
     env: () => [
@@ -200,9 +203,29 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       requests: { cpu: '250m', memory: '1Gi' },
       limits: { cpu: '1', memory: '2Gi' },
     },
-    endpoints: ({ serviceHost }) => [
+    // Cassandra ships no console. cassandra-web is the only maintained-enough
+    // option; it talks CQL over localhost and renders keyspaces and rows.
+    sidecars: [
+      {
+        name: 'ui',
+        image: 'ipushc/cassandra-web:v1.1.6',
+        env: [
+          { name: 'CASSANDRA_HOST_IPS', value: '127.0.0.1' },
+          { name: 'CASSANDRA_PORT', value: '9042' },
+          { name: 'HOST_PORT', value: ':3000' },
+        ],
+        resources: {
+          requests: { cpu: '50m', memory: '192Mi' },
+          limits: { cpu: '500m', memory: '512Mi' },
+        },
+      },
+    ],
+    httpIngressPort: 3000,
+    endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'CQL contact point', value: `${serviceHost}:9042` },
       { label: 'cqlsh', value: `cqlsh ${serviceHost} 9042` },
+      { label: 'Browser (in-cluster)', value: `http://${serviceHost}:3000` },
+      ...(externalUrl ? [{ label: 'Browser (public)', value: externalUrl }] : []),
     ],
   },
   activemq: {
@@ -225,10 +248,14 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       requests: { cpu: '50m', memory: '256Mi' },
       limits: { cpu: '500m', memory: '768Mi' },
     },
-    endpoints: ({ serviceHost }) => [
+    // the broker already serves its console on 8161 — it just was not routed
+    httpIngressPort: 8161,
+    endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'OpenWire', value: `tcp://${serviceHost}:61616` },
       { label: 'AMQP', value: `amqp://${serviceHost}:5672` },
-      { label: 'Web console (admin/admin)', value: `http://${serviceHost}:8161` },
+      { label: 'Web console (in-cluster)', value: `http://${serviceHost}:8161` },
+      ...(externalUrl ? [{ label: 'Web console (public)', value: externalUrl }] : []),
+      { label: 'Console login', value: 'admin / admin' },
     ],
   },
   ozone: {
@@ -295,7 +322,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     description: 'Apache ZooKeeper 3.9 standalone coordination service.',
     image: 'zookeeper:3.9.5',
     category: 'messaging',
-    ports: [{ name: 'client', port: 2181 }],
+    ports: [
+      { name: 'client', port: 2181 },
+      { name: 'http', port: 9000 },
+    ],
     probePort: 2181,
     startupSeconds: 60,
     env: () => [
@@ -306,9 +336,30 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       requests: { cpu: '50m', memory: '192Mi' },
       limits: { cpu: '500m', memory: '512Mi' },
     },
-    endpoints: ({ serviceHost }) => [
+    // ZooKeeper has no web console of its own; ZooNavigator connects over the
+    // client port and gives the znode tree something to render.
+    sidecars: [
+      {
+        name: 'ui',
+        image: 'elkozmon/zoonavigator:2.0.0',
+        env: [
+          { name: 'HTTP_PORT', value: '9000' },
+          { name: 'CONNECTION_LOCALZK_NAME', value: 'local' },
+          { name: 'CONNECTION_LOCALZK_CONN', value: 'localhost:2181' },
+          { name: 'AUTO_CONNECT_CONNECTION_ID', value: 'LOCALZK' },
+        ],
+        resources: {
+          requests: { cpu: '50m', memory: '192Mi' },
+          limits: { cpu: '500m', memory: '512Mi' },
+        },
+      },
+    ],
+    httpIngressPort: 9000,
+    endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'Client connect', value: `${serviceHost}:2181` },
       { label: 'zkCli', value: `zkCli.sh -server ${serviceHost}:2181` },
+      { label: 'ZooNavigator (in-cluster)', value: `http://${serviceHost}:9000` },
+      ...(externalUrl ? [{ label: 'ZooNavigator (public)', value: externalUrl }] : []),
     ],
   },
   couchdb: {
