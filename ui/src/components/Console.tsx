@@ -628,6 +628,19 @@ export default function Console({
           <p className="mt-8 text-sm text-stone-400">This instance no longer exists.</p>
         ) : !detail ? (
           <BrandLoader label="Loading workspace" sublabel={name} />
+        ) : detail.status === 'queued' ? (
+          // Not provisioning: the pool has nowhere to put this yet. Say so
+          // instead of showing a spinner that implies work is happening, and
+          // pass on the scheduler's own reason. It starts by itself once a
+          // machine is added, so there is nothing for the user to retry.
+          <BrandLoader
+            label="Waiting for capacity"
+            sublabel={
+              detail.statusDetail
+                ? `${name} — ${detail.statusDetail}`
+                : `${name} — starts on its own once a machine joins the pool`
+            }
+          />
         ) : detail.status === 'provisioning' ? (
           <BrandLoader
             label="Provisioning workspace"

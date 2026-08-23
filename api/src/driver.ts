@@ -3,7 +3,15 @@
 // runs identically on a K8s cluster, a VM fleet, or bare-metal Ubuntu boxes.
 import type { RealServiceId, RealServiceInfo } from './services.ts';
 
-export type InstanceStatus = 'provisioning' | 'running' | 'error' | 'deleting';
+// `queued` means the request is accepted but the pool has nowhere to put it.
+// It is not an error: both schedulers keep the task and place it as soon as a
+// node fits, so the workspace comes up on its own once capacity is added.
+export type InstanceStatus =
+  | 'provisioning'
+  | 'queued'
+  | 'running'
+  | 'error'
+  | 'deleting';
 
 export interface InstanceInfo {
   name: string;

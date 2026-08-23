@@ -67,6 +67,13 @@ jobs:
       - name: install api deps
         run: npm ci
         working-directory: api
+      - name: capacity accounting against the real swarm
+        # Exercises SwarmDriver against a live daemon rather than a copy of its
+        # logic, so a change in what docker returns fails here.
+        run: node --test --test-reporter spec tests/capacity-swarm.test.ts
+        working-directory: api
+        env:
+          RUN_SWARM: '1'
       - name: start API (clerk mode + FLOCI_CLOUD_TOKEN backdoor)
         working-directory: api
         env:

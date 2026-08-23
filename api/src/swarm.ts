@@ -374,6 +374,14 @@ export class SwarmDriver implements CloudDriver {
       } else if (task.desiredState === 'shutdown') {
         status = 'deleting';
         statusDetail = 'shutting down';
+      } else if (task.state === 'pending') {
+        // The scheduler has nowhere to put this yet. It is not an error and the
+        // task is not dropped — swarm keeps it and places it as soon as a node
+        // fits, so the workspace comes up on its own once capacity is added.
+        // Swarm usually explains why (e.g. "no suitable node"); prefer its own
+        // words over ours.
+        status = 'queued';
+        statusDetail = task.error ?? 'waiting for capacity in the pool';
       } else {
         statusDetail = `task ${task.state}`;
       }
@@ -1240,20 +1248,57 @@ export class SwarmDriver implements CloudDriver {
   // — cluster nodes —
 
   async nodes(): Promise<NodeInfo[]> {
-    const nodes = (await this.docker.listNodes()) as Array<Record<string, any>>;
+    const [nodes, reserved] = await Promise.all([
+      this.docker.listNodes() as Promise<Array<Record<string, any>>>,
+      this.reservedPerNode(),
+    ]);
     return nodes
-      .map((node) => ({
-        id: String(node.ID ?? ''),
-        hostname: String(node.Description?.Hostname ?? 'unknown'),
-        role: (node.Spec?.Role === 'manager' ? 'manager' : 'worker') as 'manager' | 'worker',
-        state: String(node.Status?.State ?? 'unknown'),
-        addr: node.Status?.Addr ? String(node.Status.Addr) : null,
-        cpuTotalMilli: Math.round((node.Description?.Resources?.NanoCPUs ?? 0) / 1e6),
-        memTotalBytes: Number(node.Description?.Resources?.MemoryBytes ?? 0),
-        cpuUsedMilli: null,
-        memUsedBytes: null,
-      }))
+      .map((node) => {
+        const id = String(node.ID ?? '');
+        const used = reserved.get(id);
+        return {
+          id,
+          hostname: String(node.Description?.Hostname ?? 'unknown'),
+          role: (node.Spec?.Role === 'manager' ? 'manager' : 'worker') as 'manager' | 'worker',
+          state: String(node.Status?.State ?? 'unknown'),
+          addr: node.Status?.Addr ? String(node.Status.Addr) : null,
+          cpuTotalMilli: Math.round((node.Description?.Resources?.NanoCPUs ?? 0) / 1e6),
+          memTotalBytes: Number(node.Description?.Resources?.MemoryBytes ?? 0),
+          cpuUsedMilli: used?.cpuMilli ?? 0,
+          memUsedBytes: used?.memBytes ?? 0,
+        };
+      })
       .sort((a, b) => a.hostname.localeCompare(b.hostname));
+  }
+
+  /**
+   * How much of each node the pool has already committed, keyed by node id.
+   *
+   * This sums what running tasks *reserved*, not what their processes are
+   * touching right now. That is deliberate: reservations are the same numbers
+   * the scheduler uses to decide whether the next workspace fits, so "in use"
+   * means the same thing to the admin view and to swarm. Live usage would look
+   * lower and would tempt someone to over-commit the pool. Tasks that reserve
+   * nothing contribute nothing, which mirrors how swarm treats them.
+   */
+  private async reservedPerNode(): Promise<Map<string, { cpuMilli: number; memBytes: number }>> {
+    const totals = new Map<string, { cpuMilli: number; memBytes: number }>();
+    const tasks = (await this.docker.listTasks({
+      filters: JSON.stringify({ 'desired-state': ['running'] }),
+    })) as Array<Record<string, any>>;
+    for (const task of tasks) {
+      const nodeId = task.NodeID ? String(task.NodeID) : '';
+      if (!nodeId) continue;
+      const res = task.Spec?.Resources?.Reservations;
+      const cpuMilli = Math.round((res?.NanoCPUs ?? 0) / 1e6);
+      const memBytes = Number(res?.MemoryBytes ?? 0);
+      if (!cpuMilli && !memBytes) continue;
+      const acc = totals.get(nodeId) ?? { cpuMilli: 0, memBytes: 0 };
+      acc.cpuMilli += cpuMilli;
+      acc.memBytes += memBytes;
+      totals.set(nodeId, acc);
+    }
+    return totals;
   }
 
   /**

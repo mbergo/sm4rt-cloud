@@ -1,6 +1,8 @@
 export interface Instance {
   name: string;
-  status: 'provisioning' | 'running' | 'error' | 'deleting';
+  // `queued` = accepted, but the pool has no room yet; it starts on its own
+  // once a machine joins, so it is not an error and needs no retry.
+  status: 'provisioning' | 'queued' | 'running' | 'error' | 'deleting';
   statusDetail: string | null;
   host: string;
   endpoint: string;

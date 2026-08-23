@@ -63,6 +63,9 @@ export function BrandLoader({
 const STATUS_STYLES: Record<Instance['status'], { dot: string; text: string; label: string }> = {
   running: { dot: 'bg-emerald-400', text: 'text-emerald-300', label: 'Running' },
   provisioning: { dot: 'bg-amber-400 animate-pulse', text: 'text-amber-300', label: 'Provisioning' },
+  // Not pulsing on purpose: nothing is happening until the pool grows, and an
+  // animation here would read as progress.
+  queued: { dot: 'bg-sky-400', text: 'text-sky-300', label: 'Waiting for capacity' },
   error: { dot: 'bg-rose-400', text: 'text-rose-300', label: 'Error' },
   deleting: { dot: 'bg-zinc-400 animate-pulse', text: 'text-zinc-300', label: 'Deleting' },
 };

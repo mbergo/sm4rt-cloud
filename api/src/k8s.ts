@@ -70,6 +70,27 @@ const POD_FAILURE_REASONS = new Set([
   'OOMKilled',
 ]);
 
+/**
+ * Why the scheduler has nowhere to put this pod, or null when that is not the
+ * problem. Unschedulable is not a failure: the pod stays Pending and the
+ * scheduler places it as soon as a node fits, so it is reported as queued
+ * rather than errored. The condition carries the reason ("0/3 nodes are
+ * available: insufficient memory"), which beats anything we could invent.
+ */
+function podUnschedulableReason(pod: V1Pod): string | null {
+  if (pod.status?.phase !== 'Pending') {
+    return null;
+  }
+  for (const condition of pod.status?.conditions ?? []) {
+    if (condition.type === 'PodScheduled' && condition.status === 'False') {
+      if (condition.reason === 'Unschedulable') {
+        return condition.message ?? 'waiting for capacity in the pool';
+      }
+    }
+  }
+  return null;
+}
+
 function podFailureReason(pod: V1Pod): string | null {
   for (const containerStatus of pod.status?.containerStatuses ?? []) {
     const waiting = containerStatus.state?.waiting?.reason;
@@ -541,26 +562,37 @@ export class Provisioner implements CloudDriver {
       return info;
     }
 
-    const failureReason = await this.findPodFailure(nsName);
-    if (failureReason) {
+    const { failure, unschedulable } = await this.findPodProblem(nsName);
+    if (failure) {
       info.status = 'error';
-      info.statusDetail = failureReason;
+      info.statusDetail = failure;
+    } else if (unschedulable) {
+      info.status = 'queued';
+      info.statusDetail = unschedulable;
     }
     return info;
   }
 
-  private async findPodFailure(namespace: string): Promise<string | null> {
+  /**
+   * Distinguish a pod that broke from one the scheduler simply cannot place —
+   * the first is an error, the second resolves itself once the pool grows.
+   */
+  private async findPodProblem(
+    namespace: string,
+  ): Promise<{ failure: string | null; unschedulable: string | null }> {
     const pods = await this.core.listNamespacedPod({
       namespace,
       labelSelector: 'app=floci',
     });
+    let unschedulable: string | null = null;
     for (const pod of pods.items ?? []) {
-      const reason = podFailureReason(pod);
-      if (reason) {
-        return reason;
+      const failure = podFailureReason(pod);
+      if (failure) {
+        return { failure, unschedulable: null };
       }
+      unschedulable ??= podUnschedulableReason(pod);
     }
-    return null;
+    return { failure: null, unschedulable };
   }
 
   private serviceWorkloadName(service: RealServiceId): string {
