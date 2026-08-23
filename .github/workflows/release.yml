@@ -21,6 +21,8 @@ jobs:
     name: build & push image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +51,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push multi-arch image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,3 +65,59 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: deploy to swarm
+    needs: image
+    # Tags build an image but should not move the running cluster; a release is
+    # promoted by pushing to main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy the image this run built
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Pin the digest rather than :latest so the cluster runs exactly what
+          # this run built, and the deploy is traceable back to the commit.
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sm4rt-cloud@${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_HOST" ] || { echo "DEPLOY_HOST is not set — skipping"; exit 1; }
+
+          key="$(mktemp)"; trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          echo "Deploying $IMAGE"
+          ssh -i "$key" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo docker service update --image '$IMAGE' --update-order start-first floci-cloud"
+
+      - name: Wait for the console to answer
+        env:
+          # The container port is not published on the host — the service is
+          # only reachable through the edge proxy. Checking the public URL also
+          # covers DNS, the proxy and TLS, which is what users actually hit.
+          HEALTHCHECK_URL: ${{ secrets.DEPLOY_HEALTHCHECK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEALTHCHECK_URL" ]; then
+            echo "DEPLOY_HEALTHCHECK_URL is not set — skipping the health gate"
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "$HEALTHCHECK_URL" >/dev/null 2>&1; then
+              echo "healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "the console did not answer at $HEALTHCHECK_URL" >&2
+          exit 1
