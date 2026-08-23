@@ -21,6 +21,11 @@ bold ""
 
 # ── 1. questions ────────────────────────────────────────────────────────────
 DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# On a cloud VM `hostname -I` returns the private address, which is what the
+# swarm advertises but NOT where DNS should point. Look up the public address
+# so the wildcard hint at the end is correct; fall back to the private one.
+PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+[ -n "$PUBLIC_IP" ] || PUBLIC_IP="$DEFAULT_IP"
 
 prompt() { # var, question, default
   local var="$1" q="$2" def="$3" answer
@@ -42,7 +47,7 @@ if [ ! -t 0 ] && [ "$HAVE_TTY" = no ]; then
 fi
 
 prompt ADVERTISE_IP    "This machine's IP (cluster advertise address)" "$DEFAULT_IP"
-prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $ADVERTISE_IP)" "cloud.local"
+prompt INSTANCE_DOMAIN "Base domain (create a wildcard DNS record *.domain -> $PUBLIC_IP)" "cloud.local"
 prompt CLUSTER_NODES   "Worker machines to join now (SSH targets, e.g. ubuntu@10.0.0.12 ubuntu@10.0.0.13 — empty = manager only)" ""
 CLUSTER_NODES="$(printf '%s' "$CLUSTER_NODES" | tr ',' ' ')"
 
@@ -57,6 +62,14 @@ prompt ACME_EMAIL      "ACME account email (optional, for certificate expiry not
 prompt ADMIN_USER      "Admin username" "admin"
 prompt ADMIN_PASS      "Admin password" "floci-admin"
 prompt CLOUD_TOKEN     "Console access token (empty = generate)" ""
+# Clerk (Google/GitHub/password sign-in). Asked here rather than being an
+# env-var-only setting, so a plain `curl | bash` install can choose it. Leave
+# both empty to keep the token-only console.
+prompt CLERK_PUBLISHABLE_KEY "Clerk publishable key (empty = token login only)" ""
+if [ -n "$CLERK_PUBLISHABLE_KEY" ]; then
+  prompt CLERK_SECRET_KEY "Clerk secret key" ""
+  [ -n "$CLERK_SECRET_KEY" ] || warn "no Clerk secret key — falling back to token login"
+fi
 prompt FLOCI_CLOUD_IMAGE "sm4rt-cloud image" "ghcr.io/mbergo/sm4rt-cloud:latest"
 prompt FLOCI_IMAGE     "floci emulator image" "ghcr.io/mbergo/floci:latest"
 prompt REGISTRY_USER   "Registry username (empty = public images only)" ""
@@ -93,7 +106,13 @@ echo "    console       ${SCHEME}://${CONSOLE_HOST}"
 echo "    admin         ${SCHEME}://${CONSOLE_HOST}/admin  (${ADMIN_USER})"
 echo "    tls           ${INSTANCE_TLS} (automatic via Caddy${ACME_EMAIL:+, account $ACME_EMAIL})"
 echo "    driver        docker swarm"
+if [ -n "$CLERK_SECRET_KEY" ] && [ -n "$CLERK_PUBLISHABLE_KEY" ]; then
+  echo "    auth          clerk (sign-in UI) + token for API/CI"
+else
+  echo "    auth          token only (set a Clerk key pair to enable sign-in)"
+fi
 echo "    manager       ${ADVERTISE_IP}"
+echo "    public ip     ${PUBLIC_IP}"
 if [ -n "$CLUSTER_NODES" ]; then
   echo "    cluster       ${NODE_COUNT} machines (manager + workers: ${CLUSTER_NODES})"
 else
@@ -380,7 +399,10 @@ echo "  Console   ${SCHEME}://${CONSOLE_HOST}"
 echo "  Admin     ${SCHEME}://${CONSOLE_HOST}/admin   (${ADMIN_USER} / ${ADMIN_PASS})"
 echo "  Token     ${CLOUD_TOKEN}"
 echo ""
-echo "  DNS       point *.${INSTANCE_DOMAIN} at ${ADVERTISE_IP} (one wildcard A record)"
+echo "  DNS       point ${INSTANCE_DOMAIN} and *.${INSTANCE_DOMAIN} at ${PUBLIC_IP}"
+if [ "$PUBLIC_IP" != "$ADVERTISE_IP" ]; then
+  echo "            (cluster advertises ${ADVERTISE_IP} internally — DNS uses the public address)"
+fi
 if [ -n "$JOINED_NODES" ]; then
   echo "  Cluster   manager +${JOINED_NODES}"
 fi
