@@ -127,7 +127,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     description: 'Apache Kafka 4.3 broker (KRaft, single node).',
     image: 'apache/kafka:4.3.1',
     category: 'messaging',
-    ports: [{ name: 'broker', port: 9092 }],
+    ports: [
+      { name: 'broker', port: 9092 },
+      { name: 'http', port: 8080 },
+    ],
     probePort: 9092,
     startupSeconds: 180,
     env: ({ serviceHost }) => [
@@ -152,8 +155,31 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       requests: { cpu: '100m', memory: '512Mi' },
       limits: { cpu: '1', memory: '1Gi' },
     },
-    endpoints: ({ serviceHost }) => [
+    // Kafka speaks its own binary protocol and ships no web UI, so the broker
+    // alone has nothing to put behind an ingress. A UI container alongside it
+    // reaches the broker over localhost and gives the console something to
+    // link to, the same way flink pairs a taskmanager with its jobmanager.
+    sidecars: [
+      {
+        name: 'ui',
+        image: 'kafbat/kafka-ui:v1.4.0',
+        env: [
+          { name: 'KAFKA_CLUSTERS_0_NAME', value: 'local' },
+          { name: 'KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS', value: 'localhost:9092' },
+          { name: 'SERVER_PORT', value: '8080' },
+          { name: 'DYNAMIC_CONFIG_ENABLED', value: 'true' },
+        ],
+        resources: {
+          requests: { cpu: '100m', memory: '256Mi' },
+          limits: { cpu: '500m', memory: '768Mi' },
+        },
+      },
+    ],
+    httpIngressPort: 8080,
+    endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'Bootstrap servers', value: `${serviceHost}:9092` },
+      { label: 'Kafka UI (in-cluster)', value: `http://${serviceHost}:8080` },
+      ...(externalUrl ? [{ label: 'Kafka UI (public)', value: externalUrl }] : []),
     ],
   },
   cassandra: {
