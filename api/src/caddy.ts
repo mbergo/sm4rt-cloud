@@ -5,10 +5,16 @@
 // dynamic decision left is certificate issuance: Caddy calls our
 // /api/public/tls-ask endpoint before issuing, and parseTlsAsk decides
 // which hostnames are legitimate:
-//   console host          -> allowed outright
-//   <name>.domain         -> allowed if the instance exists
-//   <name>-<svc>.domain   -> allowed if the instance exists (catalog UIs)
+//   console host              -> allowed outright
+//   <app>.<marketplace>.domain -> allowed outright (marketplace apps, proxied
+//                                 to the PaaS host; they are not workspaces so
+//                                 there is no instance to look up)
+//   <name>.domain             -> allowed if the instance exists
+//   <name>-<svc>.domain       -> allowed if the instance exists (catalog UIs)
 import { SERVICE_CATALOG } from './services.ts';
+
+/** Reserved label for marketplace apps: <app>.<MARKETPLACE_LABEL>.<domain>. */
+export const MARKETPLACE_LABEL = (process.env.MARKETPLACE_LABEL ?? 'mktplace').toLowerCase();
 
 /** service ids that have an external HTTP UI, longest first for suffix parsing */
 const HTTP_SERVICE_IDS = Object.entries(SERVICE_CATALOG)
@@ -46,6 +52,14 @@ export function parseTlsAsk(
     const labels = sub.split('.');
     if (labels.length > 4 || labels.some((l) => !/^[a-z0-9][a-z0-9-]*$/.test(l) || l.length > 63)) {
       return { allowed: false, instance: null };
+    }
+    // <app>.<marketplace>.<domain> — a marketplace app reverse-proxied to the
+    // PaaS host. There is no workspace behind it, so the instance lookup the
+    // caller would do next can never succeed: allow it here instead. Only the
+    // exact two-label form qualifies, so a workspace that happens to be named
+    // like the marketplace label keeps its normal instance check.
+    if (labels.length === 2 && labels[1] === MARKETPLACE_LABEL) {
+      return { allowed: true, instance: null };
     }
     return { allowed: false, instance: labels[labels.length - 1]! };
   }
