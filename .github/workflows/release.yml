@@ -97,8 +97,14 @@ jobs:
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           echo "Deploying $IMAGE"
-          ssh -i "$key" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo docker service update --image '$IMAGE' --update-order start-first floci-cloud"
+          # Both services run this image. Rolling only the control plane leaves
+          # the exec agent on the previous build, so the cluster ends up serving
+          # two versions of the same commit.
+          for svc in floci-cloud floci-exec-agent; do
+            echo "  -> $svc"
+            ssh -i "$key" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+              "sudo docker service update --image '$IMAGE' --update-order start-first $svc"
+          done
 
       - name: Wait for the console to answer
         env:
