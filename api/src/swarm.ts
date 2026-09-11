@@ -735,8 +735,9 @@ export class SwarmDriver implements CloudDriver {
     // Swarm has no pods: sidecars become sibling services, so "localhost"
     // references (e.g. Flink's jobmanager.rpc.address) must point at the
     // main service's network alias instead.
-    const fixHost = (value: string): string =>
-      spec.sidecars ? value.replaceAll('localhost', serviceHost) : value;
+    const rewriteLoopback = (value: string): string =>
+      value.replaceAll('localhost', serviceHost).replaceAll('127.0.0.1', serviceHost);
+    const fixHost = (value: string): string => (spec.sidecars ? rewriteLoopback(value) : value);
     const env = spec
       .env({ serviceHost, externalHost })
       .map((e) => `${e.name}=${fixHost(e.value)}`);
@@ -761,9 +762,14 @@ export class SwarmDriver implements CloudDriver {
     };
     // caddy labels go on the service spec only (not the container) — the
     // proxy scans both, and duplicates would generate conflicting sites
-    const serviceLabels: Record<string, string> = spec.httpIngressPort
-      ? { ...labels, ...this.caddyLabels(externalHost, spec.httpIngressPort) }
-      : labels;
+    // When the ingress port belongs to a sidecar, the edge must be pointed at
+    // that sibling service instead — labelling the main one sends traffic to a
+    // port it never listens on, which surfaces as a 502 on the public host.
+    const ingressOnSidecar = Boolean(spec.httpIngressSidecar);
+    const serviceLabels: Record<string, string> =
+      spec.httpIngressPort && !ingressOnSidecar
+        ? { ...labels, ...this.caddyLabels(externalHost, spec.httpIngressPort) }
+        : labels;
     await this.createSwarmService({
       Name: this.catalogServiceName(name, service, instanceName),
       Labels: serviceLabels,
@@ -794,7 +800,7 @@ export class SwarmDriver implements CloudDriver {
     });
     for (const sidecar of spec.sidecars ?? []) {
       const sidecarEnv = (sidecar.env ?? []).map(
-        (e) => `${e.name}=${e.value.replaceAll('localhost', serviceHost)}`,
+        (e) => `${e.name}=${rewriteLoopback(e.value)}`,
       );
       await this.createSwarmService({
         Name: `${this.catalogServiceName(name, service, instanceName)}-${sidecar.name}`,
@@ -803,6 +809,9 @@ export class SwarmDriver implements CloudDriver {
           [INSTANCE_LABEL]: name,
           [SERVICE_LABEL]: `${service}-${sidecar.name}`,
           ...(instanceName ? { [SERVICE_INSTANCE_LABEL]: instanceName } : {}),
+          ...(spec.httpIngressPort && spec.httpIngressSidecar === sidecar.name
+            ? this.caddyLabels(externalHost, spec.httpIngressPort)
+            : {}),
         },
         TaskTemplate: {
           ContainerSpec: {
