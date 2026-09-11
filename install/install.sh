@@ -85,11 +85,28 @@ if [ -z "$CLOUD_TOKEN" ]; then
 fi
 # Optional integrations (set via environment before running the installer):
 #   DATABASE_URL           Postgres for users/domains persistence (default: JSON file volume)
-#   CLERK_SECRET_KEY /     Clerk authentication (Google/GitHub/password sign-in);
-#   CLERK_PUBLISHABLE_KEY  when unset the console uses token login only.
 DATABASE_URL="${DATABASE_URL:-}"
-CLERK_SECRET_KEY="${CLERK_SECRET_KEY:-}"
-CLERK_PUBLISHABLE_KEY="${CLERK_PUBLISHABLE_KEY:-}"
+
+# ── authentication ──────────────────────────────────────────────────────────
+# Clerk is the default: hosted sign-in (Google/GitHub/password) plus the
+# organization model the console's multi-tenancy is built around. Both keys
+# come from the Clerk dashboard. Choosing "token" — or leaving either key
+# blank — falls back to the built-in single console token.
+prompt AUTH_MODE "Authentication (clerk/token)" "clerk"
+case "$AUTH_MODE" in
+  [Cc]*)
+    prompt CLERK_PUBLISHABLE_KEY "Clerk publishable key (pk_...)" ""
+    prompt CLERK_SECRET_KEY      "Clerk secret key (sk_...)" ""
+    if [ -z "$CLERK_PUBLISHABLE_KEY" ] || [ -z "$CLERK_SECRET_KEY" ]; then
+      warn "Clerk selected but keys are missing — falling back to token login"
+      CLERK_PUBLISHABLE_KEY=""; CLERK_SECRET_KEY=""
+    fi
+    ;;
+  *)
+    CLERK_PUBLISHABLE_KEY=""; CLERK_SECRET_KEY=""
+    ;;
+esac
+if [ -n "$CLERK_SECRET_KEY" ]; then AUTH_LABEL=clerk; else AUTH_LABEL=token; fi
 CONSOLE_HOST="cloud.${INSTANCE_DOMAIN}"
 case "$ENABLE_TLS" in
   [Yy]*|true) INSTANCE_TLS=true; SCHEME=https ;;
@@ -105,6 +122,7 @@ echo "    domain        *.${INSTANCE_DOMAIN}"
 echo "    console       ${SCHEME}://${CONSOLE_HOST}"
 echo "    admin         ${SCHEME}://${CONSOLE_HOST}/admin  (${ADMIN_USER})"
 echo "    tls           ${INSTANCE_TLS} (automatic via Caddy${ACME_EMAIL:+, account $ACME_EMAIL})"
+echo "    auth          ${AUTH_LABEL}${CLERK_PUBLISHABLE_KEY:+ (${CLERK_PUBLISHABLE_KEY%%_*}_… )}"
 echo "    driver        docker swarm"
 if [ -n "$CLERK_SECRET_KEY" ] && [ -n "$CLERK_PUBLISHABLE_KEY" ]; then
   echo "    auth          clerk (sign-in UI) + token for API/CI"
@@ -397,7 +415,12 @@ bold "  ✅ SM4RT-CLOUD is up"
 bold ""
 echo "  Console   ${SCHEME}://${CONSOLE_HOST}"
 echo "  Admin     ${SCHEME}://${CONSOLE_HOST}/admin   (${ADMIN_USER} / ${ADMIN_PASS})"
-echo "  Token     ${CLOUD_TOKEN}"
+if [ "$AUTH_LABEL" = clerk ]; then
+  echo "  Sign-in   Clerk (hosted) — console users sign in through your Clerk instance"
+  echo "  Token     ${CLOUD_TOKEN}   (API/CLI; the console itself uses Clerk)"
+else
+  echo "  Token     ${CLOUD_TOKEN}"
+fi
 echo ""
 echo "  DNS       point ${INSTANCE_DOMAIN} and *.${INSTANCE_DOMAIN} at ${PUBLIC_IP}"
 if [ "$PUBLIC_IP" != "$ADVERTISE_IP" ]; then
