@@ -11,6 +11,7 @@
 //                                 there is no instance to look up)
 //   <name>.domain             -> allowed if the instance exists
 //   <name>-<svc>.domain       -> allowed if the instance exists (catalog UIs)
+//   <name>-<svc>-<inst>.domain -> same, for a named service instance
 import { SERVICE_CATALOG } from './services.ts';
 
 /** Reserved label for marketplace apps: <app>.<MARKETPLACE_LABEL>.<domain>. */
@@ -69,6 +70,14 @@ export function parseTlsAsk(
   for (const svc of HTTP_SERVICE_IDS) {
     if (sub.endsWith(`-${svc}`)) {
       return { allowed: false, instance: sub.slice(0, -(svc.length + 1)) };
+    }
+    // A named service instance carries its own label after the service id
+    // (<workspace>-<svc>-<instance>), so the id is no longer the last one.
+    // Split on it and look up the workspace sitting in front.
+    const marker = `-${svc}-`;
+    const at = sub.indexOf(marker);
+    if (at > 0) {
+      return { allowed: false, instance: sub.slice(0, at) };
     }
   }
   return { allowed: false, instance: sub };

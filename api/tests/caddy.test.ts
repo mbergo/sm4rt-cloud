@@ -65,3 +65,16 @@ test('invalid dns labels are refused', () => {
     instance: null,
   });
 });
+
+test('a named service instance still resolves to its workspace', () => {
+  // a second copy of a service gets its own label after the service id, so the
+  // id stops being the last one and a suffix match alone no longer finds it
+  assert.deepEqual(ask(`demo-airflow-two.${DOMAIN}`), { allowed: false, instance: 'demo' });
+});
+
+test('a hyphenated workspace keeps its name in front of a named instance', () => {
+  assert.deepEqual(ask(`swift-badger-airflow-k2.${DOMAIN}`), {
+    allowed: false,
+    instance: 'swift-badger',
+  });
+});
