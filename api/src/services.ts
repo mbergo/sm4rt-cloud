@@ -115,6 +115,14 @@ export interface RealServiceSpec {
   volumes?: { name: string; mountPath: string; sizeLimit?: string }[];
   /** when set, an Ingress is created exposing this HTTP port externally */
   httpIngressPort?: number;
+  /**
+   * Name of the sidecar that serves `httpIngressPort`, when it is not the main
+   * container. Kubernetes does not care - sidecars share the pod's network
+   * namespace, so the port answers on the pod IP either way. Swarm has no pods:
+   * a sidecar is a sibling service with its own address, so the edge has to be
+   * pointed at it explicitly or it proxies to a port nothing listens on.
+   */
+  httpIngressSidecar?: string;
   /** set to HTTPS when the backend serves TLS (e.g. NiFi 2.x) */
   ingressBackendProtocol?: 'HTTPS';
   endpoints: (ctx: EndpointContext) => ServiceEndpoint[];
@@ -162,7 +170,7 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     sidecars: [
       {
         name: 'ui',
-        image: 'kafbat/kafka-ui:v1.4.0',
+        image: 'kafbat/kafka-ui:v1.3.0',
         env: [
           { name: 'KAFKA_CLUSTERS_0_NAME', value: 'local' },
           { name: 'KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS', value: 'localhost:9092' },
@@ -176,6 +184,7 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       },
     ],
     httpIngressPort: 8080,
+    httpIngressSidecar: 'ui',
     endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'Bootstrap servers', value: `${serviceHost}:9092` },
       { label: 'Kafka UI (in-cluster)', value: `http://${serviceHost}:8080` },
@@ -221,6 +230,7 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       },
     ],
     httpIngressPort: 3000,
+    httpIngressSidecar: 'ui',
     endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'CQL contact point', value: `${serviceHost}:9042` },
       { label: 'cqlsh', value: `cqlsh ${serviceHost} 9042` },
@@ -355,6 +365,7 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       },
     ],
     httpIngressPort: 9000,
+    httpIngressSidecar: 'ui',
     endpoints: ({ serviceHost, externalUrl }) => [
       { label: 'Client connect', value: `${serviceHost}:2181` },
       { label: 'zkCli', value: `zkCli.sh -server ${serviceHost}:2181` },
