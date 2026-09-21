@@ -294,7 +294,7 @@ const ASL_TEMPLATE = `{
   "Comment": "Hello world state machine",
   "StartAt": "Hello",
   "States": {
-    "Hello": { "Type": "Pass", "Result": "Hello from floci", "End": true }
+    "Hello": { "Type": "Pass", "Result": "Hello from sm4rt-cloud", "End": true }
   }
 }
 `;
@@ -2003,7 +2003,7 @@ function MonitoringView({ instance }: { instance: string }) {
                 const label = isRealServiceId(svc.service)
                   ? svc.service
                   : svc.service === 'floci'
-                    ? 'floci core (AWS APIs)'
+                    ? 'sm4rt-cloud core (AWS APIs)'
                     : svc.service;
                 return (
                   <tr key={svc.service} className="border-b border-white/5 last:border-0">
@@ -4355,7 +4355,7 @@ function KeyActions({ instance, item, notify }: DetailProps) {
 
 function RuleActions({ instance, item, notify }: DetailProps) {
   const region = useRegion();
-  const [source, setSource] = useState('floci.console');
+  const [source, setSource] = useState('sm4rt.console');
   const [detailType, setDetailType] = useState('test-event');
   const [detail, setDetail] = useState('{"hello":"world"}');
   const [result, setResult] = useState('');
@@ -4848,8 +4848,8 @@ function EmailActions({ instance, item, notify }: DetailProps) {
     setError('');
     actOnResource<{ messageId?: string }>(instance, 'ses', region, item.id, 'send', {
       to: to.trim() || item.id,
-      subject: subject.trim() || 'Test from floci console',
-      body: body.trim() || 'Hello from floci.',
+      subject: subject.trim() || 'Test from sm4rt-cloud console',
+      body: body.trim() || 'Hello from sm4rt-cloud.',
     })
       .then((data) => {
         notify('email sent');

@@ -59,7 +59,7 @@ export default function TokenLogin({ onSignedIn }: { onSignedIn: () => void }) {
           autoFocus
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          placeholder="FLOCI_CLOUD_TOKEN"
+          placeholder="SM4RT_CLOUD_TOKEN"
           className="w-full rounded-xl border border-white/10 bg-stone-950/60 px-3.5 py-2.5 text-sm outline-none transition focus:border-amber-500/60"
         />
         {error ? <p className="mt-2 text-xs text-rose-400">{error}</p> : null}

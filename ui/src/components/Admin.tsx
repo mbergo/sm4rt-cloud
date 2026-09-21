@@ -127,7 +127,7 @@ function AdminLogin({ onSignedIn }: { onSignedIn: (auth: string) => void }) {
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
       <div className="animate-rise-in flex flex-col items-center text-center">
         <BrandMark size="lg" />
-        <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">FLOCI ADMIN</h1>
+        <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">SM4RT-CLOUD ADMIN</h1>
         <p className="mt-1.5 text-sm text-stone-400">Operator console for this cloud.</p>
       </div>
       <form
@@ -675,7 +675,7 @@ function AdminDashboard({
           <BrandMark />
           <div className="min-w-0">
             <h1 className="font-display text-lg font-bold leading-tight tracking-tight">
-              FLOCI ADMIN
+              SM4RT-CLOUD ADMIN
             </h1>
             <p className="text-xs text-stone-500">
               {overview ? `${overview.driver} · ${overview.instanceDomain}` : 'loading…'}
