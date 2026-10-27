@@ -59,6 +59,13 @@ export interface ServiceInstanceRef {
   statusDetail: string | null;
   host: string;
   externalUrl: string | null;
+  /** connection details for this instance (named instances get their own hosts) */
+  endpoints: ServiceEndpoint[];
+  /**
+   * Public UI URL the console may frame, set only when the edge was
+   * configured to allow it (see RealServiceSpec.embeddable) — null otherwise.
+   */
+  embedUrl: string | null;
 }
 
 export interface RealServiceInfo {
@@ -70,12 +77,20 @@ export interface RealServiceInfo {
   status: RealServiceStatus;
   statusDetail: string | null;
   endpoints: ServiceEndpoint[];
+  /** public UI URL the console may frame, or null (see ServiceInstanceRef.embedUrl) */
+  embedUrl: string | null;
   /** per-instance detail (swarm driver only) */
   instances?: ServiceInstanceRef[];
 }
 
 interface EndpointContext {
   serviceHost: string;
+  /**
+   * In-cluster host serving `httpIngressPort`. Same as serviceHost on
+   * Kubernetes (sidecars share the pod); on swarm a sidecar-served UI lives on
+   * its own sibling service, so this is that service's alias.
+   */
+  uiHost: string;
   externalUrl: string | null;
 }
 
@@ -125,6 +140,12 @@ export interface RealServiceSpec {
   httpIngressSidecar?: string;
   /** set to HTTPS when the backend serves TLS (e.g. NiFi 2.x) */
   ingressBackendProtocol?: 'HTTPS';
+  /**
+   * The console embeds this service's UI in the deployment page. The edge
+   * strips the backend's X-Frame-Options and allows framing only from the
+   * console origin (CSP frame-ancestors).
+   */
+  embeddable?: boolean;
   endpoints: (ctx: EndpointContext) => ServiceEndpoint[];
 }
 
@@ -185,9 +206,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     ],
     httpIngressPort: 8080,
     httpIngressSidecar: 'ui',
-    endpoints: ({ serviceHost, externalUrl }) => [
+    embeddable: true,
+    endpoints: ({ serviceHost, uiHost, externalUrl }) => [
       { label: 'Bootstrap servers', value: `${serviceHost}:9092` },
-      { label: 'Kafka UI (in-cluster)', value: `http://${serviceHost}:8080` },
+      { label: 'Kafka UI (in-cluster)', value: `http://${uiHost}:8080` },
       ...(externalUrl ? [{ label: 'Kafka UI (public)', value: externalUrl }] : []),
     ],
   },
@@ -231,10 +253,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     ],
     httpIngressPort: 3000,
     httpIngressSidecar: 'ui',
-    endpoints: ({ serviceHost, externalUrl }) => [
+    endpoints: ({ serviceHost, uiHost, externalUrl }) => [
       { label: 'CQL contact point', value: `${serviceHost}:9042` },
       { label: 'cqlsh', value: `cqlsh ${serviceHost} 9042` },
-      { label: 'Browser (in-cluster)', value: `http://${serviceHost}:3000` },
+      { label: 'Browser (in-cluster)', value: `http://${uiHost}:3000` },
       ...(externalUrl ? [{ label: 'Browser (public)', value: externalUrl }] : []),
     ],
   },
@@ -366,10 +388,10 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     ],
     httpIngressPort: 9000,
     httpIngressSidecar: 'ui',
-    endpoints: ({ serviceHost, externalUrl }) => [
+    endpoints: ({ serviceHost, uiHost, externalUrl }) => [
       { label: 'Client connect', value: `${serviceHost}:2181` },
       { label: 'zkCli', value: `zkCli.sh -server ${serviceHost}:2181` },
-      { label: 'ZooNavigator (in-cluster)', value: `http://${serviceHost}:9000` },
+      { label: 'ZooNavigator (in-cluster)', value: `http://${uiHost}:9000` },
       ...(externalUrl ? [{ label: 'ZooNavigator (public)', value: externalUrl }] : []),
     ],
   },
