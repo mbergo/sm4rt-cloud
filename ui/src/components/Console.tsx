@@ -40,7 +40,9 @@ import {
   ListTree,
   Lock,
   Mail,
+  MaximizeIcon,
   MemoryStick,
+  MinimizeIcon,
   MessagesSquare,
   Network,
   NotebookPen,
@@ -2805,7 +2807,19 @@ function RealServiceView({
 
   const status = info.status;
   const canStart = status === 'stopped' || status === 'error';
-  const snippet = status === 'running' ? buildConnectSnippet(service, info.endpoints) : null;
+  const instances = info.instances ?? [];
+  const runningInstances = instances.filter((inst) => inst.status !== 'stopped');
+  const selectedInst =
+    runningInstances.find((inst) => (inst.name ?? '') === (selected ?? '')) ??
+    runningInstances.find((inst) => inst.name === null) ??
+    runningInstances[0] ??
+    null;
+  // Named instances have their own hosts: show the selected one's details
+  // rather than the default instance's, which may not even exist.
+  const endpoints = selectedInst?.endpoints ?? info.endpoints;
+  const publicUrl = selectedInst ? selectedInst.externalUrl : null;
+  const isPublic = (value: string) => value.startsWith('https://') || value === publicUrl;
+  const snippet = status === 'running' ? buildConnectSnippet(service, endpoints) : null;
   // two-tap stop: first tap arms the button, second tap stops; disarms after 4s
   const requestStop = () => {
     if (!stopArmed) {
@@ -2877,16 +2891,21 @@ function RealServiceView({
         </p>
       ) : null}
 
-      {info.endpoints.length > 0 ? (
+      {endpoints.length > 0 ? (
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
             {status === 'running' ? 'Connect' : 'Endpoints'}
+            {selectedInst?.name ? (
+              <span className="ml-2 font-mono normal-case tracking-normal text-stone-600">
+                {selectedInst.name}
+              </span>
+            ) : null}
           </h3>
           <div className="mt-2 space-y-2">
-            {[...info.endpoints]
+            {[...endpoints]
               .sort((a, b) => {
-                const aPub = a.value.startsWith('https://') ? 0 : 1;
-                const bPub = b.value.startsWith('https://') ? 0 : 1;
+                const aPub = isPublic(a.value) ? 0 : 1;
+                const bPub = isPublic(b.value) ? 0 : 1;
                 return aPub - bPub;
               })
               .map((endpoint) => (
@@ -2898,14 +2917,14 @@ function RealServiceView({
                   <p className="text-[10px] uppercase tracking-widest text-stone-500">
                     {endpoint.label}
                   </p>
-                  {endpoint.value.startsWith('https://') ? (
+                  {isPublic(endpoint.value) ? (
                     <a
                       href={endpoint.value}
                       target="_blank"
                       rel="noreferrer"
                       className="block truncate font-mono text-xs text-amber-300 hover:underline"
                     >
-                      {endpoint.value.replace('https://', '')}
+                      {endpoint.value.replace(/^https?:\/\//, '')}
                     </a>
                   ) : (
                     <p className="truncate font-mono text-xs text-stone-200">{endpoint.value}</p>
@@ -2932,13 +2951,7 @@ function RealServiceView({
       ) : null}
 
       {(() => {
-        const instances = info.instances ?? [];
-        const running = instances.filter((inst) => inst.status !== 'stopped');
-        const selectedInst =
-          running.find((inst) => (inst.name ?? '') === (selected ?? '')) ??
-          running.find((inst) => inst.name === null) ??
-          running[0] ??
-          null;
+        const running = runningInstances;
         return (
           <>
             <section>
@@ -3078,10 +3091,184 @@ function RealServiceView({
             ) : null}
 
             {selectedInst ? <InlineLogTerminal instance={instance} /> : null}
+
+            {selectedInst?.externalUrl && SERVICE_CATALOG_EMBEDS.has(service) ? (
+              <EmbeddedServiceCanvas
+                key={selectedInst.serviceName}
+                label={info.label}
+                instanceName={selectedInst.name}
+                status={selectedInst.status}
+                statusDetail={selectedInst.statusDetail}
+                externalUrl={selectedInst.externalUrl}
+                embedUrl={selectedInst.embedUrl ?? null}
+              />
+            ) : null}
           </>
         );
       })()}
     </div>
+  );
+}
+
+/** Catalog services whose web UI the deployment page frames inline. */
+const SERVICE_CATALOG_EMBEDS: ReadonlySet<RealServiceId> = new Set<RealServiceId>(['kafka']);
+
+/**
+ * The service's own web UI, framed in the middle of the deployment page.
+ * Only framed when the control plane reports an embedUrl — i.e. the edge was
+ * configured to replace the backend's X-Frame-Options for this console.
+ * Otherwise the browser would render a blocked frame, so fall back to a link.
+ */
+function EmbeddedServiceCanvas({
+  label,
+  instanceName,
+  status,
+  statusDetail,
+  externalUrl,
+  embedUrl,
+}: {
+  label: string;
+  instanceName: string | null;
+  status: RealServiceStatus;
+  statusDetail: string | null;
+  externalUrl: string;
+  embedUrl: string | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const title = `${label} UI`;
+  const running = status === 'running';
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
+
+  const reload = () => {
+    setLoaded(false);
+    setReloadKey((key) => key + 1);
+  };
+
+  let body: ReactNode;
+  if (!running) {
+    body = (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <BrandLoader size="sm" label={`${title} is starting`} />
+        {statusDetail ? (
+          <p className="max-w-md font-mono text-[11px] text-stone-500">{statusDetail}</p>
+        ) : null}
+      </div>
+    );
+  } else if (!embedUrl) {
+    body = (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="max-w-md text-sm text-stone-400">
+          This deployment's edge route predates inline embedding, so the browser would block the
+          frame. Stop and start the instance to pick up the new route, or open the UI in its own
+          tab.
+        </p>
+        <a
+          href={externalUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:border-amber-400/60"
+        >
+          <ExternalLink className="h-3.5 w-3.5" /> Open {title}
+        </a>
+      </div>
+    );
+  } else {
+    body = (
+      <div className="relative h-full w-full">
+        {!loaded ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-stone-950">
+            <BrandLoader size="sm" label={`Loading ${title}`} />
+          </div>
+        ) : null}
+        <iframe
+          key={reloadKey}
+          src={embedUrl}
+          title={title}
+          onLoad={() => setLoaded(true)}
+          referrerPolicy="no-referrer"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
+          className="h-full w-full border-0 bg-white"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <section
+      className={
+        expanded
+          ? 'fixed inset-0 z-50 flex flex-col bg-stone-950/95 p-3 backdrop-blur'
+          : 'mx-auto w-full max-w-6xl'
+      }
+    >
+      {!expanded ? (
+        <h3 className="text-center text-xs font-semibold uppercase tracking-widest text-stone-500">
+          {title}
+        </h3>
+      ) : null}
+      <div
+        className={`flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-stone-950 shadow-2xl shadow-black/40 ${
+          expanded ? 'min-h-0 flex-1' : 'mt-2'
+        }`}
+      >
+        <div className="flex items-center gap-2 border-b border-white/10 bg-white/[0.03] px-3 py-2">
+          <span className="flex gap-1.5" aria-hidden>
+            <span className="h-2.5 w-2.5 rounded-full bg-rose-400/60" />
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-400/60" />
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/60" />
+          </span>
+          <span
+            className={`ml-2 h-2 w-2 shrink-0 rounded-full ${SERVICE_STATUS_DOT[status]}`}
+            title={status}
+          />
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-400">
+            {externalUrl.replace(/^https?:\/\//, '')}
+            {instanceName ? <span className="ml-2 text-stone-600">({instanceName})</span> : null}
+          </span>
+          <button
+            type="button"
+            onClick={reload}
+            disabled={!running || !embedUrl}
+            title="Reload"
+            className="rounded-md p-1.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <a
+            href={externalUrl}
+            target="_blank"
+            rel="noreferrer"
+            title="Open in a new tab"
+            className="rounded-md p-1.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            title={expanded ? 'Exit full screen (Esc)' : 'Full screen'}
+            className="rounded-md p-1.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+          >
+            {expanded ? <MinimizeIcon className="h-3.5 w-3.5" /> : <MaximizeIcon className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <div className={expanded ? 'min-h-0 flex-1' : 'h-[72vh] min-h-[480px]'}>{body}</div>
+      </div>
+    </section>
   );
 }
 

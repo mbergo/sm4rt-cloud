@@ -42,6 +42,8 @@ const INSTANCE_LABEL = 'floci.cloud/instance';
 const SERVICE_LABEL = 'floci.cloud/service';
 /** named catalog instance ('' / absent = the default instance) */
 const SERVICE_INSTANCE_LABEL = 'floci.cloud/service-instance';
+/** set on a catalog service whose edge route lets the console frame its UI */
+const EMBED_LABEL = 'floci.cloud/embed-origin';
 const WS_OWNER_LABEL = 'sm4rt.workspace';
 const MAX_INSTANCES_PER_SERVICE = 5;
 const AGENT_LABEL = 'floci.cloud/agent';
@@ -73,6 +75,8 @@ export interface SwarmDriverOptions {
   instanceDomain: string;
   flociImage: string;
   tls: boolean;
+  /** console origin (scheme://host) allowed to frame embeddable service UIs */
+  consoleOrigin?: string;
 }
 
 interface TaskSummary {
@@ -258,7 +262,7 @@ export class SwarmDriver implements CloudDriver {
    * source of truth, no admin-API pushes. With TLS, `tls.on_demand` keeps
    * certificate issuance gated by our /api/public/tls-ask endpoint.
    */
-  private caddyLabels(host: string, port: number): Record<string, string> {
+  private caddyLabels(host: string, port: number, embeddable = false): Record<string, string> {
     const labels: Record<string, string> = {
       caddy: this.opts.tls ? host : `http://${host}`,
       'caddy.reverse_proxy': `{{upstreams ${port}}}`,
@@ -266,7 +270,20 @@ export class SwarmDriver implements CloudDriver {
     if (this.opts.tls) {
       labels['caddy.tls.on_demand'] = '';
     }
+    if (embeddable && this.opts.consoleOrigin) {
+      // Backends like kafbat send X-Frame-Options: DENY. Drop it and allow
+      // framing from the console only, instead of from anywhere.
+      labels['caddy.reverse_proxy.header_down'] = '-X-Frame-Options';
+      labels['caddy.header.Content-Security-Policy'] =
+        `"frame-ancestors 'self' ${this.opts.consoleOrigin}"`;
+    }
     return labels;
+  }
+
+  /** In-cluster host that serves a catalog service's `httpIngressPort`. */
+  private uiHostFor(serviceHost: string, service: RealServiceId): string {
+    const sidecar = SERVICE_CATALOG[service].httpIngressSidecar;
+    return sidecar ? `${serviceHost}-${sidecar}` : serviceHost;
   }
 
   private async ensureNetwork(): Promise<void> {
@@ -625,16 +642,39 @@ export class SwarmDriver implements CloudDriver {
       svcs.map(async (svc) => {
         const labels: Record<string, string> = svc.Spec?.Labels ?? {};
         const inst = labels[SERVICE_INSTANCE_LABEL] || null;
-        const { status, statusDetail } = await this.taskStatusOf(String(svc.Spec?.Name));
+        const serviceName = String(svc.Spec?.Name);
+        let { status, statusDetail } = await this.taskStatusOf(serviceName);
+        // A sidecar-served UI is its own swarm service; until it runs, the
+        // public URL answers 502 — so the instance is not "running" yet.
+        if (status === 'running' && spec.httpIngressSidecar) {
+          const ui = await this.taskStatusOf(`${serviceName}-${spec.httpIngressSidecar}`);
+          if (ui.status !== 'running') {
+            status = ui.status;
+            statusDetail = `${spec.httpIngressSidecar}: ${ui.statusDetail ?? ui.status}`;
+          }
+        }
+        const host = this.serviceHostFor(name, service, inst ?? undefined);
+        const externalUrl = spec.httpIngressPort
+          ? `${this.scheme()}://${this.serviceExternalHostFor(name, service, inst ?? undefined)}`
+          : null;
         return {
           name: inst,
-          serviceName: String(svc.Spec?.Name),
+          serviceName,
           status,
           statusDetail,
-          host: this.serviceHostFor(name, service, inst ?? undefined),
-          externalUrl: spec.httpIngressPort
-            ? `${this.scheme()}://${this.serviceExternalHostFor(name, service, inst ?? undefined)}`
-            : null,
+          host,
+          externalUrl,
+          endpoints: spec.endpoints({
+            serviceHost: host,
+            uiHost: this.uiHostFor(host, service),
+            externalUrl,
+          }),
+          // only when the edge route was built to allow framing from this
+          // console — services started before that keep X-Frame-Options
+          embedUrl:
+            externalUrl && this.opts.consoleOrigin && labels[EMBED_LABEL] === this.opts.consoleOrigin
+              ? externalUrl
+              : null,
         };
       }),
     );
@@ -650,6 +690,10 @@ export class SwarmDriver implements CloudDriver {
       status = 'error';
       statusDetail = instances.find((i) => i.status === 'error')?.statusDetail ?? null;
     }
+    // Service-level endpoints describe the default instance when it exists,
+    // otherwise the first named one — a named-only deployment must not
+    // advertise hosts for a default instance that was never created.
+    const primary = instances.find((i) => i.name === null) ?? instances[0];
     const serviceHost = this.serviceHostFor(name, service);
     const externalUrl = spec.httpIngressPort
       ? `${this.scheme()}://${this.serviceExternalHostFor(name, service)}`
@@ -662,7 +706,14 @@ export class SwarmDriver implements CloudDriver {
       category: spec.category,
       status,
       statusDetail,
-      endpoints: spec.endpoints({ serviceHost, externalUrl }),
+      endpoints:
+        primary?.endpoints ??
+        spec.endpoints({
+          serviceHost,
+          uiHost: this.uiHostFor(serviceHost, service),
+          externalUrl,
+        }),
+      embedUrl: primary?.embedUrl ?? null,
       instances,
     };
   }
@@ -754,11 +805,14 @@ export class SwarmDriver implements CloudDriver {
           },
         }) as unknown as Docker.MountSettings,
     );
+    const embedOrigin =
+      spec.httpIngressPort && spec.embeddable ? this.opts.consoleOrigin : undefined;
     const labels: Record<string, string> = {
       [MANAGED_LABEL]: MANAGED_BY,
       [INSTANCE_LABEL]: name,
       [SERVICE_LABEL]: service,
       ...(instanceName ? { [SERVICE_INSTANCE_LABEL]: instanceName } : {}),
+      ...(embedOrigin ? { [EMBED_LABEL]: embedOrigin } : {}),
     };
     // caddy labels go on the service spec only (not the container) — the
     // proxy scans both, and duplicates would generate conflicting sites
@@ -768,7 +822,10 @@ export class SwarmDriver implements CloudDriver {
     const ingressOnSidecar = Boolean(spec.httpIngressSidecar);
     const serviceLabels: Record<string, string> =
       spec.httpIngressPort && !ingressOnSidecar
-        ? { ...labels, ...this.caddyLabels(externalHost, spec.httpIngressPort) }
+        ? {
+            ...labels,
+            ...this.caddyLabels(externalHost, spec.httpIngressPort, spec.embeddable),
+          }
         : labels;
     await this.createSwarmService({
       Name: this.catalogServiceName(name, service, instanceName),
@@ -810,7 +867,7 @@ export class SwarmDriver implements CloudDriver {
           [SERVICE_LABEL]: `${service}-${sidecar.name}`,
           ...(instanceName ? { [SERVICE_INSTANCE_LABEL]: instanceName } : {}),
           ...(spec.httpIngressPort && spec.httpIngressSidecar === sidecar.name
-            ? this.caddyLabels(externalHost, spec.httpIngressPort)
+            ? this.caddyLabels(externalHost, spec.httpIngressPort, spec.embeddable)
             : {}),
         },
         TaskTemplate: {

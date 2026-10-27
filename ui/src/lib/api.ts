@@ -206,6 +206,10 @@ export interface ServiceInstanceRef {
   statusDetail: string | null;
   host: string | null;
   externalUrl: string | null;
+  /** connection details for this instance (older control planes omit it) */
+  endpoints?: { label: string; value: string }[];
+  /** public UI URL the edge allows the console to frame, or null */
+  embedUrl?: string | null;
 }
 
 export interface RealServiceInfo {
@@ -217,6 +221,8 @@ export interface RealServiceInfo {
   status: RealServiceStatus;
   statusDetail: string | null;
   endpoints: { label: string; value: string }[];
+  /** public UI URL the edge allows the console to frame, or null */
+  embedUrl?: string | null;
   instances?: ServiceInstanceRef[];
 }
 
