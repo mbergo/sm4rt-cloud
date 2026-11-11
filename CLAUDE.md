@@ -102,7 +102,8 @@ Plus the global rules:
 
 - **Work autonomously.** No need to ask before each step; carry a task through
   to an open PR. Never merge — Marcus merges.
-- **Small PRs, steady cadence.** One focused change per PR.
+- **Small PRs, steady cadence.** Split at natural break points, not one change
+  per PR.
 - **Every mistake becomes a CI test.** When a bug slips through, the fix PR adds
   a test that runs in GitHub Actions so it cannot regress.
 - **English** for commits, PR titles and bodies.
