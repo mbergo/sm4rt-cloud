@@ -71,7 +71,7 @@ graph TB
 
 - **Machine 1** (`install.sh`): becomes the Swarm **manager**. Runs the Caddy
   edge and the control plane (both pinned with `node.role==manager`), and
-  creates the `floci-net` overlay network that spans every machine.
+  creates the `floci-net` overlay network that spans every Swarm machine.
 - **Machines 2..N** (`add-node.sh user@host …`, run *from* machine 1 over SSH):
   installs Docker if missing and joins as **workers**. Pure capacity.
 - **Workspaces & catalog services**: the Swarm scheduler places them on any
@@ -82,6 +82,18 @@ graph TB
   `2377/tcp` (management), `7946/tcp+udp` (gossip), `4789/udp` (overlay VXLAN).
 - **Failure model**: workers can come and go (workspaces reschedule); machine 1
   is the single point of entry — promote extra managers if you need HA.
+
+### Reference topology
+
+The reference topology is one main machine plus two workers, 8 GB each:
+
+- **Machine 1 — main** (`install.sh`): Caddy edge and control plane (Swarm manager).
+- **Machines 2 and 3 — workers** (joined by `install.sh` or `add-node.sh`):
+  catalog services and workspaces.
+
+8 GB is the reference size, not the minimum: the supported minimum stays
+4 GB per machine (see [INSTALL.md](INSTALL.md)). The RAM check runs only in
+`install.sh` on machine 1; `add-node.sh` does not check worker RAM.
 
 ## Install
 
