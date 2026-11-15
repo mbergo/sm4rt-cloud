@@ -96,8 +96,13 @@ The reference layout is one main machine plus three 8 GB machines:
   capacity pool.
 
 8 GB is the reference size for each worker in this layout, not the supported
-minimum: the installer warns when detected RAM is below 3500 MB (4 GB is
-recommended), and smaller nodes are not covered by this layout. Coolify's own installation is outside this repository's installers.
+minimum. The RAM warning (below 3500 MB, 4 GB recommended) runs only in
+`install.sh` on machine 1; `add-node.sh` does not check worker RAM, so check
+workers yourself. Smaller nodes are not covered by this layout. Coolify's own
+installation is outside this repository's installers.
+
+The four-machine demo in [INSTALL.md](INSTALL.md) joins `user@m4` to the Swarm.
+For this layout, join only machines 2 and 3.
 
 ## Install
 
