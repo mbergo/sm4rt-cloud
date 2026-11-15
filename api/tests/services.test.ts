@@ -74,14 +74,43 @@ test('polaris spec: catalog + management ports and bootstrap credentials', () =>
 test('endpoints render with and without an external url', () => {
   for (const id of ['spark', 'atlas', 'polaris'] as const) {
     const spec = SERVICE_CATALOG[id];
-    const base = spec.endpoints({ serviceHost: `${id}-host`, externalUrl: null });
-    const pub = spec.endpoints({ serviceHost: `${id}-host`, externalUrl: 'https://x.example.com' });
+    const base = spec.endpoints({ serviceHost: `${id}-host`, uiHost: `${id}-host`, externalUrl: null });
+    const pub = spec.endpoints({
+      serviceHost: `${id}-host`,
+      uiHost: `${id}-host`,
+      externalUrl: 'https://x.example.com',
+    });
     assert.ok(base.length > 0);
     assert.ok(pub.length > base.length, `${id} should add a public endpoint`);
     for (const e of [...base, ...pub]) {
       assert.ok(e.label.length > 0 && e.value.length > 0, `${id} endpoint fields`);
     }
   }
+});
+
+test('sidecar-served UIs advertise the host that actually serves them', () => {
+  for (const id of ['kafka', 'cassandra', 'zookeeper'] as const) {
+    const spec = SERVICE_CATALOG[id];
+    assert.ok(spec.httpIngressSidecar, `${id} serves its UI from a sidecar`);
+    const endpoints = spec.endpoints({
+      serviceHost: 'svc-main',
+      uiHost: 'svc-main-ui',
+      externalUrl: null,
+    });
+    const port = spec.httpIngressPort;
+    const ui = endpoints.filter((e) => e.value.includes(`:${port}`));
+    assert.ok(ui.length > 0, `${id} lists its UI`);
+    for (const e of ui) {
+      assert.ok(e.value.includes('svc-main-ui'), `${id} UI endpoint ${e.value} must use uiHost`);
+    }
+  }
+});
+
+test('kafka UI is embeddable and served by the ui sidecar', () => {
+  const kafka = SERVICE_CATALOG.kafka;
+  assert.equal(kafka.embeddable, true);
+  assert.equal(kafka.httpIngressSidecar, 'ui');
+  assert.ok(kafka.sidecars?.some((s) => s.name === 'ui'));
 });
 
 test('INSTANCE_NAME_RE accepts short kebab names and rejects bad input', () => {

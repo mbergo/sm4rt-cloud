@@ -56,6 +56,8 @@ const ADMIN_USER = process.env.ADMIN_USER ?? 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS ?? 'floci-admin';
 const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY ?? '';
 const CONSOLE_HOST = process.env.CONSOLE_HOST ?? `cloud.${INSTANCE_DOMAIN}`;
+// both drivers derive scheme() from INSTANCE_TLS; this is what they'd return
+const CONSOLE_ORIGIN = `${INSTANCE_TLS ? 'https' : 'http'}://${CONSOLE_HOST}`;
 const PUBLIC_DIR = process.env.PUBLIC_DIR ?? path.resolve(import.meta.dirname, '../public');
 const MAX_TTL_HOURS = 7 * 24;
 const MAX_INSTANCES = Number(process.env.MAX_INSTANCES ?? 20);
@@ -70,6 +72,7 @@ async function createDriver(): Promise<CloudDriver> {
       instanceDomain: INSTANCE_DOMAIN,
       flociImage: FLOCI_IMAGE,
       tls: INSTANCE_TLS,
+      consoleOrigin: CONSOLE_ORIGIN,
     });
   }
   return new Provisioner({
@@ -78,6 +81,7 @@ async function createDriver(): Promise<CloudDriver> {
     ingressClass: INGRESS_CLASS,
     tls: INSTANCE_TLS,
     clusterIssuer: CLUSTER_ISSUER,
+    consoleOrigin: CONSOLE_ORIGIN,
     ...(GATEWAY_NAME && GATEWAY_NAMESPACE
       ? { gatewayName: GATEWAY_NAME, gatewayNamespace: GATEWAY_NAMESPACE }
       : {}),

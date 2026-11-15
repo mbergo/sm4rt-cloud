@@ -56,6 +56,8 @@ const INSTANCE_LABEL = 'floci.cloud/instance';
 const SERVICE_LABEL = 'floci.cloud/service';
 const CREATED_AT_ANNOTATION = 'floci.cloud/created-at';
 const EXPIRES_AT_ANNOTATION = 'floci.cloud/expires-at';
+/** set on a catalog deployment whose route lets the console frame its UI */
+const EMBED_ORIGIN_ANNOTATION = 'floci.cloud/embed-origin';
 const AGENT_LABEL = 'floci.cloud/agent';
 const AGENT_REPO_ANNOTATION = 'floci.cloud/agent-repo';
 const AGENT_MODEL_ANNOTATION = 'floci.cloud/agent-model';
@@ -114,6 +116,8 @@ export interface ProvisionerOptions {
   /** when set, expose hosts via Gateway API HTTPRoutes attached to this Gateway instead of Ingress */
   gatewayName?: string;
   gatewayNamespace?: string;
+  /** console origin (scheme://host) allowed to frame embeddable service UIs */
+  consoleOrigin?: string;
 }
 
 const MEMORY_MULTIPLIERS: Record<string, number> = {
@@ -194,7 +198,25 @@ export class Provisioner implements CloudDriver {
     service: string;
     port: number;
     labels: Record<string, string>;
+    /** origin allowed to frame the backend (replaces its X-Frame-Options) */
+    frameOrigin?: string;
   }): Promise<void> {
+    const filters = args.frameOrigin
+      ? [
+          {
+            type: 'ResponseHeaderModifier',
+            responseHeaderModifier: {
+              remove: ['X-Frame-Options'],
+              set: [
+                {
+                  name: 'Content-Security-Policy',
+                  value: `frame-ancestors 'self' ${args.frameOrigin}`,
+                },
+              ],
+            },
+          },
+        ]
+      : [];
     const body = {
       apiVersion: 'gateway.networking.k8s.io/v1',
       kind: 'HTTPRoute',
@@ -207,6 +229,7 @@ export class Provisioner implements CloudDriver {
         rules: [
           {
             backendRefs: [{ name: args.service, port: args.port }],
+            ...(filters.length > 0 ? { filters } : {}),
           },
         ],
       },
@@ -684,9 +707,21 @@ export class Provisioner implements CloudDriver {
       [SERVICE_LABEL]: service,
     };
     const serviceHost = this.serviceHostFor(name, service);
+    // Framing needs a response-header rewrite at the edge. Gateway API has a
+    // standard filter for it; ingress-nginx only via snippet annotations,
+    // which it rejects by default — so Ingress mode stays link-only.
+    const embedOrigin =
+      spec.httpIngressPort && spec.embeddable && this.gatewayMode
+        ? this.opts.consoleOrigin
+        : undefined;
 
     const deployment: V1Deployment = {
-      metadata: { name: workload, namespace, labels },
+      metadata: {
+        name: workload,
+        namespace,
+        labels,
+        ...(embedOrigin ? { annotations: { [EMBED_ORIGIN_ANNOTATION]: embedOrigin } } : {}),
+      },
       spec: {
         replicas: 1,
         selector: { matchLabels: { app: workload } },
@@ -779,6 +814,7 @@ export class Provisioner implements CloudDriver {
           service: workload,
           port: spec.httpIngressPort,
           labels,
+          ...(embedOrigin ? { frameOrigin: embedOrigin } : {}),
         });
       } else {
         const ingressAnnotations: Record<string, string> = {
@@ -1075,7 +1111,14 @@ export class Provisioner implements CloudDriver {
       category: spec.category,
       status,
       statusDetail,
-      endpoints: spec.endpoints({ serviceHost, externalUrl }),
+      // sidecars share the pod, so the UI answers on the service host itself
+      endpoints: spec.endpoints({ serviceHost, uiHost: serviceHost, externalUrl }),
+      embedUrl:
+        externalUrl &&
+        this.opts.consoleOrigin &&
+        deployment?.metadata?.annotations?.[EMBED_ORIGIN_ANNOTATION] === this.opts.consoleOrigin
+          ? externalUrl
+          : null,
     };
   }
 }
