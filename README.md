@@ -71,7 +71,7 @@ graph TB
 
 - **Machine 1** (`install.sh`): becomes the Swarm **manager**. Runs the Caddy
   edge and the control plane (both pinned with `node.role==manager`), and
-  creates the `floci-net` overlay network that spans every machine.
+  creates the `floci-net` overlay network that spans every Swarm machine.
 - **Machines 2..N** (`add-node.sh user@host …`, run *from* machine 1 over SSH):
   installs Docker if missing and joins as **workers**. Pure capacity. Do not pass
   a machine that is dedicated to Coolify (see Reference topology): it must not
@@ -95,9 +95,9 @@ The reference layout is one main machine plus three 8 GB machines:
   not run `add-node.sh` or join the Swarm, so it is not part of the SM4RT-CLOUD
   capacity pool.
 
-8 GB is the reference size for each node in this layout, not the supported
-minimum: the installer warns below 4 GB RAM, and smaller nodes are not covered
-by this layout. Coolify's own installation is outside this repository's installers.
+8 GB is the reference size for each worker in this layout, not the supported
+minimum: the installer warns when detected RAM is below 3500 MB (4 GB is
+recommended), and smaller nodes are not covered by this layout. Coolify's own installation is outside this repository's installers.
 
 ## Install
 
