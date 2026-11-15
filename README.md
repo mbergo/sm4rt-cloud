@@ -85,7 +85,7 @@ graph TB
 
 ### Reference topology
 
-The reference demo is one main machine plus two workers, 8 GB each:
+The reference topology is one main machine plus two workers, 8 GB each:
 
 - **Machine 1 — main** (`install.sh`): Caddy edge and control plane (Swarm manager).
 - **Machines 2 and 3 — workers** (joined by `install.sh` or `add-node.sh`):
