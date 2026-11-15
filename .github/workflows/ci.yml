@@ -148,3 +148,63 @@ jobs:
             kubectl -n "$ns" describe pods | tail -60
             kubectl -n "$ns" logs deploy/floci --tail=50 || true
           done
+
+  install-e2e:
+    name: install-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOMAIN: sm4rt.test
+      CLOUD_TOKEN: ci-install-token
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the image from this commit
+        run: docker build -t sm4rt-cloud:ci .
+      - name: run the README installer non-interactively
+        run: |
+          sudo INSTANCE_DOMAIN="$DOMAIN" ENABLE_TLS=no AUTH_MODE=token \
+            ADVERTISE_IP="$(hostname -I | awk '{print $1}')" \
+            ADMIN_USER=admin ADMIN_PASS=ci-admin CLOUD_TOKEN="$CLOUD_TOKEN" \
+            FLOCI_CLOUD_IMAGE=sm4rt-cloud:ci \
+            bash install/install.sh < /dev/null
+      - name: route test hostnames to the edge
+        run: echo "127.0.0.1 cloud.$DOMAIN probe.$DOMAIN" | sudo tee -a /etc/hosts
+      - name: console answers through caddy
+        run: |
+          for i in $(seq 1 40); do
+            curl -fsS "http://cloud.$DOMAIN/healthz" && break
+            [ "$i" -eq 40 ] && exit 1; sleep 3
+          done
+          test "$(curl -fsS "http://cloud.$DOMAIN/api/public/config" | jq -r .authMode)" = token
+      - name: create a workspace and wait until it runs
+        run: |
+          auth="Authorization: Bearer $CLOUD_TOKEN"
+          curl -fsS -X POST -H "$auth" -H 'content-type: application/json' \
+            -d '{"name":"probe"}' "http://cloud.$DOMAIN/api/instances"
+          for i in $(seq 1 60); do
+            status="$(curl -fsS -H "$auth" "http://cloud.$DOMAIN/api/instances/probe" | jq -r .status)"
+            echo "status=$status"; [ "$status" = running ] && exit 0; sleep 5
+          done
+          exit 1
+      - name: S3 works against the workspace endpoint
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          aws configure set default.s3.addressing_style path
+          for i in $(seq 1 20); do
+            aws --endpoint-url "http://probe.$DOMAIN" s3 mb s3://install-e2e && break
+            [ "$i" -eq 20 ] && exit 1; sleep 3
+          done
+          aws --endpoint-url "http://probe.$DOMAIN" s3 ls | grep -q install-e2e
+      - name: delete the workspace
+        run: |
+          curl -fsS -X DELETE -H "Authorization: Bearer $CLOUD_TOKEN" \
+            "http://cloud.$DOMAIN/api/instances/probe"
+      - name: diagnostics
+        if: failure()
+        run: |
+          sudo docker service ls || true
+          sudo docker service logs --tail 100 floci-cloud || true
+          sudo docker service logs --tail 50 caddy || true
