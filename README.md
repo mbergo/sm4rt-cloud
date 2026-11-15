@@ -60,22 +60,20 @@ graph TB
         WSb["workspace: floci engine"]
     end
 
-    subgraph M4["Machine 4 — Coolify (outside the Swarm)"]
-        COOL["Coolify — not joined to the Swarm"]
+    subgraph M4["Machine 4 — worker"]
+        WSc["workspace: floci engine"]
     end
 
     Caddy --> CP
-    Caddy -.->|"overlay network floci-net"| WSa & WSb & SVCa
-    CP -->|"Docker Swarm API (schedules containers)"| M2 & M3
+    Caddy -.->|"overlay network floci-net"| WSa & WSb & WSc & SVCa
+    CP -->|"Docker Swarm API (schedules containers)"| M2 & M3 & M4
 ```
 
 - **Machine 1** (`install.sh`): becomes the Swarm **manager**. Runs the Caddy
   edge and the control plane (both pinned with `node.role==manager`), and
   creates the `floci-net` overlay network that spans every Swarm machine.
 - **Machines 2..N** (`add-node.sh user@host …`, run *from* machine 1 over SSH):
-  installs Docker if missing and joins as **workers**. Pure capacity. Do not pass
-  a machine that is dedicated to Coolify (see Reference topology): it must not
-  join the Swarm.
+  installs Docker if missing and joins as **workers**. Pure capacity.
 - **Workspaces & catalog services**: the Swarm scheduler places them on any
   machine with free capacity. All traffic enters through machine 1; the overlay
   network routes it to wherever the container landed. The admin area shows
@@ -87,22 +85,15 @@ graph TB
 
 ### Reference topology
 
-The reference layout is one main machine plus three 8 GB machines:
+The reference demo is one main machine plus two workers, 8 GB each:
 
 - **Machine 1 — main** (`install.sh`): Caddy edge and control plane (Swarm manager).
-- **Machines 2 and 3 — 8 GB workers** (`add-node.sh`): catalog services and workspaces.
-- **Machine 4 — 8 GB, dedicated to Coolify**: runs Coolify on its own node. It must
-  not run `add-node.sh` or join the Swarm, so it is not part of the SM4RT-CLOUD
-  capacity pool.
+- **Machines 2 and 3 — workers** (joined by `install.sh` or `add-node.sh`):
+  catalog services and workspaces.
 
-8 GB is the reference size for each worker in this layout, not the supported
-minimum. The RAM warning (below 3500 MB, 4 GB recommended) runs only in
-`install.sh` on machine 1; `add-node.sh` does not check worker RAM, so check
-workers yourself. Smaller nodes are not covered by this layout. Coolify's own
-installation is outside this repository's installers.
-
-The four-machine demo in [INSTALL.md](INSTALL.md) joins `user@m4` to the Swarm.
-For this layout, join only machines 2 and 3.
+8 GB is the reference size, not the minimum: the supported minimum stays
+4 GB per machine (see [INSTALL.md](INSTALL.md)). The RAM check runs only in
+`install.sh` on machine 1; `add-node.sh` does not check worker RAM.
 
 ## Install
 
