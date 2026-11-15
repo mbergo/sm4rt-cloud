@@ -83,6 +83,18 @@ graph TB
 - **Failure model**: workers can come and go (workspaces reschedule); machine 1
   is the single point of entry — promote extra managers if you need HA.
 
+### Reference topology
+
+The reference layout is one main machine plus three 8 GB machines:
+
+- **Machine 1 — main** (`install.sh`): Caddy edge and control plane (Swarm manager).
+- **Machines 2 and 3 — 8 GB workers** (`add-node.sh`): catalog services and workspaces.
+- **Machine 4 — 8 GB, dedicated to Coolify**: runs Coolify on its own node. It is
+  not part of the SM4RT-CLOUD capacity pool.
+
+8 GB is the minimum per node, not a target; larger nodes are fine. Coolify's
+own installation is outside this repository's installers.
+
 ## Install
 
 ### Option A — machines (bare metal / VMs, Ubuntu)
