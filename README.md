@@ -60,20 +60,22 @@ graph TB
         WSb["workspace: floci engine"]
     end
 
-    subgraph M4["Machine 4 — worker"]
-        WSc["workspace: floci engine"]
+    subgraph M4["Machine 4 — Coolify (outside the Swarm)"]
+        COOL["Coolify — not joined to the Swarm"]
     end
 
     Caddy --> CP
-    Caddy -.->|"overlay network floci-net"| WSa & WSb & WSc & SVCa
-    CP -->|"Docker Swarm API (schedules containers)"| M2 & M3 & M4
+    Caddy -.->|"overlay network floci-net"| WSa & WSb & SVCa
+    CP -->|"Docker Swarm API (schedules containers)"| M2 & M3
 ```
 
 - **Machine 1** (`install.sh`): becomes the Swarm **manager**. Runs the Caddy
   edge and the control plane (both pinned with `node.role==manager`), and
   creates the `floci-net` overlay network that spans every machine.
 - **Machines 2..N** (`add-node.sh user@host …`, run *from* machine 1 over SSH):
-  installs Docker if missing and joins as **workers**. Pure capacity.
+  installs Docker if missing and joins as **workers**. Pure capacity. Do not pass
+  a machine that is dedicated to Coolify (see Reference topology): it must not
+  join the Swarm.
 - **Workspaces & catalog services**: the Swarm scheduler places them on any
   machine with free capacity. All traffic enters through machine 1; the overlay
   network routes it to wherever the container landed. The admin area shows
@@ -89,11 +91,13 @@ The reference layout is one main machine plus three 8 GB machines:
 
 - **Machine 1 — main** (`install.sh`): Caddy edge and control plane (Swarm manager).
 - **Machines 2 and 3 — 8 GB workers** (`add-node.sh`): catalog services and workspaces.
-- **Machine 4 — 8 GB, dedicated to Coolify**: runs Coolify on its own node. It is
-  not part of the SM4RT-CLOUD capacity pool.
+- **Machine 4 — 8 GB, dedicated to Coolify**: runs Coolify on its own node. It must
+  not run `add-node.sh` or join the Swarm, so it is not part of the SM4RT-CLOUD
+  capacity pool.
 
-8 GB is the minimum per node, not a target; larger nodes are fine. Coolify's
-own installation is outside this repository's installers.
+8 GB is the reference size for each node in this layout, not the supported
+minimum: the installer warns below 4 GB RAM, and smaller nodes are not covered
+by this layout. Coolify's own installation is outside this repository's installers.
 
 ## Install
 
