@@ -13,3 +13,12 @@ dist/
 .claude/
 skills-lock.json
 __pycache__/
+
+# tool state and local scratch
+.omc/
+**/.omc/
+.nimbalyst/
+teste-de-mentira/
+
+# private agent notes (live hosts, account ids)
+journal.md
