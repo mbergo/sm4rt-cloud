@@ -196,6 +196,19 @@ export function createLogDemuxer(): { push: (chunk: Buffer) => string } {
   };
 }
 
+/**
+ * Catalog id that owns a sidecar's `${service}-${sidecar}` label, or null when
+ * the label is not one of the catalog's declared sidecars.
+ */
+export function sidecarOwner(label: string): RealServiceId | null {
+  for (const id of Object.keys(SERVICE_CATALOG) as RealServiceId[]) {
+    if ((SERVICE_CATALOG[id].sidecars ?? []).some((side) => label === `${id}-${side.name}`)) {
+      return id;
+    }
+  }
+  return null;
+}
+
 export class SwarmDriver implements CloudDriver {
   readonly kind = 'swarm' as const;
   private docker: Docker;
@@ -615,17 +628,62 @@ export class SwarmDriver implements CloudDriver {
     return { status: 'starting', statusDetail: `task ${task.state}` };
   }
 
+  /**
+   * Why a sidecar is not serving, or null when it is fine. Swarm restarts a
+   * failing task every few seconds, so the newest task of a crash-looping
+   * sidecar is usually "starting", never "failed" - look at recent history
+   * instead of the latest state alone.
+   */
+  private async sidecarProblem(specName: string): Promise<string | null> {
+    const tasks = (await this.docker.listTasks({
+      filters: JSON.stringify({ service: [specName] }),
+    })) as Array<Record<string, any>>;
+    const recent = tasks
+      .sort((a, b) => String(b.CreatedAt ?? '').localeCompare(String(a.CreatedAt ?? '')))
+      .slice(0, 5);
+    if (recent.some((t) => String(t.Status?.State ?? '') === 'running')) {
+      return null;
+    }
+    const failed = recent.filter((t) =>
+      ['failed', 'rejected'].includes(String(t.Status?.State ?? '')),
+    );
+    if (failed.length < 2) {
+      return null;
+    }
+    return String(failed[0].Status?.Err ?? `task ${failed[0].Status?.State}`);
+  }
+
   private async describeCatalogService(
     name: string,
     service: RealServiceId,
     svcs: Record<string, any>[],
+    sidecarSvcs: Record<string, any>[] = [],
   ): Promise<RealServiceInfo> {
     const spec = SERVICE_CATALOG[service];
     const instances: ServiceInstanceRef[] = await Promise.all(
       svcs.map(async (svc) => {
         const labels: Record<string, string> = svc.Spec?.Labels ?? {};
         const inst = labels[SERVICE_INSTANCE_LABEL] || null;
-        const { status, statusDetail } = await this.taskStatusOf(String(svc.Spec?.Name));
+        const main = await this.taskStatusOf(String(svc.Spec?.Name));
+        const status = main.status;
+        let statusDetail = main.statusDetail;
+        // A service whose main container runs but whose sidecar is down still
+        // reads "running" - and its public URL answers 502/503. Say which part
+        // is broken instead of leaving the console looking healthy.
+        if (status === 'running') {
+          for (const side of sidecarSvcs) {
+            const sideLabels: Record<string, string> = side.Spec?.Labels ?? {};
+            if ((sideLabels[SERVICE_INSTANCE_LABEL] || null) !== inst) {
+              continue;
+            }
+            const problem = await this.sidecarProblem(String(side.Spec?.Name));
+            if (problem) {
+              const sidecarName = String(sideLabels[SERVICE_LABEL] ?? '').slice(service.length + 1);
+              statusDetail = `${sidecarName} sidecar keeps failing: ${problem}`;
+              break;
+            }
+          }
+        }
         return {
           name: inst,
           serviceName: String(svc.Spec?.Name),
@@ -643,6 +701,7 @@ export class SwarmDriver implements CloudDriver {
     let statusDetail: string | null = null;
     if (instances.some((i) => i.status === 'running')) {
       status = 'running';
+      statusDetail = instances.find((i) => i.status === 'running' && i.statusDetail)?.statusDetail ?? null;
     } else if (instances.some((i) => i.status === 'starting')) {
       status = 'starting';
       statusDetail = instances.find((i) => i.status === 'starting')?.statusDetail ?? null;
@@ -676,30 +735,44 @@ export class SwarmDriver implements CloudDriver {
     }
     const services = await this.listManagedServices({});
     const byId = new Map<string, Record<string, any>[]>();
+    const sidecarsById = new Map<string, Record<string, any>[]>();
     for (const svc of services as Array<Record<string, any>>) {
       const labels: Record<string, string> = svc.Spec?.Labels ?? {};
       const id = labels[SERVICE_LABEL] ?? '';
+      if (labels[INSTANCE_LABEL] !== name || !id) {
+        continue;
+      }
       // sidecars carry `${service}-${sidecar}` labels — only group primaries
-      if (labels[INSTANCE_LABEL] === name && id && id in SERVICE_CATALOG) {
+      if (id in SERVICE_CATALOG) {
         const list = byId.get(id) ?? [];
         list.push(svc);
         byId.set(id, list);
+        continue;
+      }
+      const owner = sidecarOwner(id);
+      if (owner) {
+        const list = sidecarsById.get(owner) ?? [];
+        list.push(svc);
+        sidecarsById.set(owner, list);
       }
     }
     return Promise.all(
       (Object.keys(SERVICE_CATALOG) as RealServiceId[]).map((id) =>
-        this.describeCatalogService(name, id, byId.get(id) ?? []),
+        this.describeCatalogService(name, id, byId.get(id) ?? [], sidecarsById.get(id) ?? []),
       ),
     );
   }
 
   async getService(name: string, service: RealServiceId): Promise<RealServiceInfo> {
     const services = await this.listManagedServices({});
-    const mine = (services as Array<Record<string, any>>).filter((svc) => {
-      const labels: Record<string, string> = svc.Spec?.Labels ?? {};
-      return labels[INSTANCE_LABEL] === name && labels[SERVICE_LABEL] === service;
-    });
-    return this.describeCatalogService(name, service, mine);
+    const owned = (services as Array<Record<string, any>>).filter(
+      (svc) => (svc.Spec?.Labels ?? {})[INSTANCE_LABEL] === name,
+    );
+    const mine = owned.filter((svc) => (svc.Spec?.Labels ?? {})[SERVICE_LABEL] === service);
+    const sidecars = owned.filter(
+      (svc) => sidecarOwner(String((svc.Spec?.Labels ?? {})[SERVICE_LABEL] ?? '')) === service,
+    );
+    return this.describeCatalogService(name, service, mine, sidecars);
   }
 
   async serviceLogs(name: string, service: RealServiceId, tailLines: number): Promise<string> {
