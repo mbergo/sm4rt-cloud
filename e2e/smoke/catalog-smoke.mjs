@@ -47,8 +47,10 @@ const API = (args.api ?? 'http://127.0.0.1:8080').replace(/\/$/, '');
 const TOKEN = args.token ?? process.env.FLOCI_CLOUD_TOKEN ?? '';
 const WS = args.workspace ?? 'smoke';
 const EDGE = args.edge ? args.edge.replace(/\/$/, '') : null;
-const ONLY = args.only ? args.only.split(',') : null;
-const SKIP = args.skip ? args.skip.split(',') : [];
+// an explicit --only, even an empty one, is a filter: an empty one selects
+// nothing and is rejected below instead of meaning "everything"
+const ONLY = args.only !== undefined ? args.only.split(',').filter(Boolean) : null;
+const SKIP = args.skip !== undefined ? args.skip.split(',').filter(Boolean) : [];
 const KEEP = args.keep === 'true';
 const EXTRA_WAIT = Number(args['pull-seconds'] ?? 900);
 const REPORT = args.report ?? null;
