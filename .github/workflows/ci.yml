@@ -42,6 +42,9 @@ jobs:
       - name: unit tests (domains)
         run: node --test tests/domains.test.ts
         working-directory: api
+      - name: unit tests (service catalog)
+        run: node --test tests/services.test.ts
+        working-directory: api
       - name: install ui deps
         run: npm ci
         working-directory: ui
@@ -110,6 +113,74 @@ jobs:
       - name: stop API
         if: always()
         run: kill "$(cat /tmp/api.pid)" 2>/dev/null || true
+
+  swarm-smoke:
+    # Deploys real catalog services and console features on a live swarm and
+    # checks each one answers, through the same API and edge proxy an install
+    # uses. A subset runs here to keep the job short; the scripts cover the
+    # whole catalog when run without --only (see e2e/smoke/).
+    name: swarm-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: init docker swarm
+        run: docker swarm init
+      - name: install api deps
+        run: npm ci
+        working-directory: api
+      - name: start API (token mode)
+        working-directory: api
+        env:
+          DRIVER: swarm
+          INSTANCE_DOMAIN: localhost
+          PORT: '8080'
+          FLOCI_CLOUD_TOKEN: smoke
+        run: |
+          nohup npm start > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/healthz > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8080/healthz > /dev/null
+      - name: create workspace and edge proxy
+        run: |
+          curl -sf -X POST -H 'Authorization: Bearer smoke' -H 'content-type: application/json' \
+            -d '{"name":"smoke"}' http://127.0.0.1:8080/api/instances > /dev/null
+          docker service create --name caddy --network floci-net \
+            --publish published=80,target=80,mode=host \
+            --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,ro \
+            --env CADDY_INGRESS_NETWORKS=floci-net --env CADDY_DOCKER_POLLING_INTERVAL=5s \
+            lucaslorentz/caddy-docker-proxy:2.13.1-alpine > /dev/null
+          for i in $(seq 1 90); do
+            status=$(curl -sf -H 'Authorization: Bearer smoke' http://127.0.0.1:8080/api/instances/smoke \
+              | node -pe 'JSON.parse(require("fs").readFileSync(0)).status' || true)
+            [ "$status" = "running" ] && break
+            sleep 2
+          done
+          test "$status" = "running"
+      - name: catalog smoke (deploy, function, console panel, stop)
+        run: >
+          node e2e/smoke/catalog-smoke.mjs --token smoke --edge http://127.0.0.1
+          --only httpd,zookeeper,couchdb,kafka,cassandra
+      - name: compute smoke (container, cache, gateway, dns, cdn, function)
+        run: >
+          node e2e/smoke/compute-smoke.mjs --token smoke --edge http://127.0.0.1
+          --only container,cache,gateway,dns,cdn,function
+      - name: api logs
+        if: always()
+        run: cat /tmp/api.log || true
+      - name: swarm state on failure
+        if: failure()
+        run: |
+          docker service ls
+          docker service ps --no-trunc $(docker service ls -q) | head -60
 
   kind-e2e:
     name: kind-e2e
