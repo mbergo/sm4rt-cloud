@@ -269,7 +269,18 @@ const CHECKS = {
       ? pass('OAuth token issued for root')
       : fail(`token request -> ${res.status || res.error} ${res.body.slice(0, 120)}`);
   },
-  lgtm: httpCheck('/api/health', { contains: '"database": "ok"' }),
+  lgtm: async (ctx) => {
+    const res = await ctx.edge('/api/health');
+    let db = null;
+    try {
+      db = JSON.parse(res.body).database;
+    } catch {
+      // not JSON
+    }
+    return res.status === 200 && db === 'ok'
+      ? pass('Grafana health: database ok')
+      : fail(`GET /api/health -> ${res.status || res.error}, database=${db}`);
+  },
 };
 
 async function testService(svc) {
@@ -282,12 +293,44 @@ async function testService(svc) {
     return result;
   }
 
+  // Never take over a service someone already runs in this workspace: the
+  // run would stop it at the end.
+  if (svc.status !== 'stopped') {
+    result.deploy = fail(`already ${svc.status} in workspace "${WS}" - stop it or use another workspace`);
+    return result;
+  }
+
   // 1. deploy
   const start = await api('POST', `/api/instances/${WS}/services/${id}/start`);
   if (start.status >= 300) {
     result.deploy = fail(`start -> HTTP ${start.status} ${start.text.slice(0, 200)}`);
     return result;
   }
+  // From here on this run owns the service: stop it however the checks end.
+  try {
+    await checkService(svc, result, started, check);
+  } finally {
+    result.stop = KEEP ? pass('kept (--keep)') : await stopService(id);
+  }
+  return result;
+}
+
+async function stopService(id) {
+  const stop = await api('POST', `/api/instances/${WS}/services/${id}/stop`).catch((err) => ({
+    status: 0,
+    text: err.message,
+  }));
+  let gone = false;
+  for (let i = 0; i < 24 && !gone; i++) {
+    await sleep(2500);
+    const list = await api('GET', `/api/instances/${WS}/services`).catch(() => null);
+    gone = list?.json?.services?.find((s) => s.id === id)?.status === 'stopped';
+  }
+  return stop.status < 300 && gone ? pass('stopped') : fail(`stop -> HTTP ${stop.status}, still listed`);
+}
+
+async function checkService(svc, result, started, check) {
+  const id = svc.id;
   const deadline = Date.now() + (svc.startupSeconds ?? 300) * 1000 + EXTRA_WAIT * 1000;
   let info = null;
   let lastState = '';
@@ -306,7 +349,7 @@ async function testService(svc) {
   }
   if (info?.status !== 'running') {
     result.deploy = fail(`never reached running: ${lastState}`);
-    return result;
+    return;
   }
   result.deploy = pass(`running after ${Math.round((Date.now() - started) / 1000)}s`);
 
@@ -375,20 +418,6 @@ async function testService(svc) {
     result.logTail = String(tail.json?.logs ?? '').split('\n').slice(-30).join('\n');
   }
 
-  // 4. stop
-  if (!KEEP) {
-    const stop = await api('POST', `/api/instances/${WS}/services/${id}/stop`);
-    let gone = false;
-    for (let i = 0; i < 24 && !gone; i++) {
-      await sleep(2500);
-      const list = await api('GET', `/api/instances/${WS}/services`);
-      gone = list.json?.services?.find((s) => s.id === id)?.status === 'stopped';
-    }
-    result.stop = stop.status < 300 && gone ? pass('stopped') : fail(`stop -> HTTP ${stop.status}, still listed`);
-  } else {
-    result.stop = pass('kept (--keep)');
-  }
-  return result;
 }
 
 async function main() {
@@ -398,9 +427,23 @@ async function main() {
     process.exit(2);
   }
   const list = await api('GET', `/api/instances/${WS}/services`);
-  const catalog = list.json?.services ?? [];
+  const catalog = list.json?.services;
+  if (list.status !== 200 || !Array.isArray(catalog) || catalog.length === 0) {
+    console.error(`could not read the service catalog: HTTP ${list.status} ${list.text.slice(0, 200)}`);
+    process.exit(2);
+  }
+  const known = new Set(catalog.map((s) => s.id));
+  const unknown = [...(ONLY ?? []), ...SKIP].filter((id) => !known.has(id));
+  if (unknown.length > 0) {
+    console.error(`unknown catalog ids: ${unknown.join(', ')} (known: ${[...known].join(', ')})`);
+    process.exit(2);
+  }
   const missing = catalog.map((s) => s.id).filter((id) => !CHECKS[id]);
   const selected = catalog.filter((s) => (!ONLY || ONLY.includes(s.id)) && !SKIP.includes(s.id));
+  if (selected.length === 0) {
+    console.error('the selection matches no catalog service');
+    process.exit(2);
+  }
   log(`catalog has ${catalog.length} services; testing ${selected.length}`);
 
   const results = [];

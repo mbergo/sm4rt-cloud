@@ -134,15 +134,65 @@ async function until(what, fn) {
   throw new Failed(`${what} did not happen within ${WAIT / 1000}s${last ? ` (${last})` : ''}`);
 }
 
+// Short random suffix so two runs against one workspace never share a name.
+const RUN = Math.random().toString(36).slice(2, 6);
+const named = (base) => `${base}-${RUN}`;
+
 async function create(path, body) {
   const res = await api('POST', `${BASE}/${path}`, body ?? {});
   must(res.status === 201, `POST ${path} -> HTTP ${res.status} ${res.text.slice(0, 200)}`);
   return res.json;
 }
 
-async function remove(path) {
+/**
+ * Runs one feature with its own cleanup list. Every resource a feature
+ * creates registers its removal right after creation, and the removals run
+ * newest first however the feature ends. A removal that fails fails the
+ * feature, so a passing run never leaves anything behind.
+ */
+async function withCleanup(body) {
+  const cleanups = [];
+  const own = (label, fn) => cleanups.push({ label, fn });
+  let detail;
+  let error = null;
+  try {
+    detail = await body(own);
+  } catch (err) {
+    error = err;
+  }
+  const leaks = [];
+  for (const { label, fn } of cleanups.reverse()) {
+    try {
+      await fn();
+    } catch (err) {
+      leaks.push(`${label}: ${err.message}`);
+    }
+  }
+  if (error) {
+    throw new Failed(leaks.length ? `${error.message}; cleanup also failed - ${leaks.join('; ')}` : error.message);
+  }
+  if (leaks.length) {
+    throw new Failed(`cleanup failed - ${leaks.join('; ')}`);
+  }
+  return detail;
+}
+
+const removing = (path, ok = [204]) => async () => {
   const res = await api('DELETE', `${BASE}/${path}`);
-  must(res.status === 204, `DELETE ${path} -> HTTP ${res.status} ${res.text.slice(0, 160)}`);
+  must(ok.includes(res.status), `DELETE ${path} -> HTTP ${res.status} ${res.text.slice(0, 160)}`);
+};
+
+/** Workspace-wide add-ons (one per workspace): never take over one that exists. */
+async function enableAddon(path, own) {
+  const before = await api('GET', `${BASE}/${path}`);
+  must(before.status === 200, `GET ${path} -> HTTP ${before.status}`);
+  must(
+    !before.json?.enabled && !['running', 'starting'].includes(before.json?.state),
+    `${path} is already enabled in workspace "${WS}" - disable it or use another workspace`,
+  );
+  const made = await create(path);
+  own(path, removing(path));
+  return made;
 }
 
 /** Wait for an item in a list endpoint to report state "running". */
@@ -152,6 +202,13 @@ const runningIn = (path, key, name) =>
     const item = (res.json?.[key] ?? []).find((x) => x.name === name);
     must(item?.state !== 'error', `${path} "${name}" is in error: ${JSON.stringify(item).slice(0, 200)}`);
     return item?.state === 'running' ? item : null;
+  });
+
+/** Run a command inside a workspace service through the console's exec API. */
+const execIn = (target, script) =>
+  until(`command in ${target}`, async () => {
+    const res = await api('POST', `/api/instances/${WS}/exec`, { service: target, cmd: ['sh', '-c', script] });
+    return res.status === 200 && res.json?.exitCode === 0 ? String(res.json.output ?? '') : null;
   });
 
 // The edge answers 200 with an empty body for a hostname it has no route for
@@ -172,61 +229,81 @@ const edgeOk = (what, url, path, { want = 200, contains = null, header = null } 
     return res;
   });
 
-// A shared web container: the gateway, DNS alias and CDN all need an upstream.
-const WEB = 'smokeweb';
-let webReady = false;
-async function ensureWeb() {
-  if (webReady) {
-    return;
-  }
-  const list = await api('GET', `${BASE}/tasks`);
-  if (!(list.json?.tasks ?? []).some((t) => t.name === WEB)) {
-    await create('tasks', { name: WEB, image: 'httpd:2.4.68', port: 80, plan: 'micro' });
-  }
-  const task = await runningIn('tasks', 'tasks', WEB);
+/** A web container of this run's own: the gateway, DNS alias and CDN need an upstream. */
+async function webTask(own) {
+  const name = named('web');
+  await create('tasks', { name, image: 'httpd:2.4.68', port: 80, plan: 'micro' });
+  own(`task ${name}`, async () => {
+    const res = await api('POST', `${BASE}/tasks/${name}/action`, { action: 'delete' });
+    must(res.status === 202, `delete task ${name} -> HTTP ${res.status} ${res.text.slice(0, 160)}`);
+  });
+  const task = await runningIn('tasks', 'tasks', name);
   await edgeOk('container', task.url, '/', { contains: 'It works' });
-  webReady = true;
+  return task;
 }
 
+const shq = (v) => `'${String(v).replaceAll("'", `'\\''`)}'`;
+
 const FEATURES = {
-  async container() {
-    await ensureWeb();
-    const logs = await api('GET', `${BASE}/tasks/${WEB}/logs`);
-    must(logs.status === 200, `task logs -> HTTP ${logs.status}`);
-    return 'httpd container served through its public URL; logs readable';
-  },
+  container: () =>
+    withCleanup(async (own) => {
+      const task = await webTask(own);
+      const logs = await api('GET', `${BASE}/tasks/${task.name}/logs`);
+      must(logs.status === 200, `task logs -> HTTP ${logs.status}`);
+      return 'httpd container served through its public URL; logs readable';
+    }),
 
-  async cache() {
-    const out = [];
-    for (const engine of ['redis-7', 'valkey-8']) {
-      const name = `sc-${engine.split('-')[0]}`;
-      const made = await create('caches', { name, engine, plan: 'micro' });
-      must(made.connectionUri?.startsWith('redis://'), 'cache has no connection URI');
-      await runningIn('caches', 'caches', name);
-      await remove(`caches/${name}`);
-      out.push(engine);
-    }
-    return `${out.join(', ')} reached running`;
-  },
+  cache: () =>
+    withCleanup(async (own) => {
+      const out = [];
+      for (const engine of ['redis-7', 'valkey-8']) {
+        const name = named(`sc-${engine.split('-')[0]}`);
+        const made = await create('caches', { name, engine, plan: 'micro' });
+        own(`cache ${name}`, removing(`caches/${name}`));
+        must(made.connectionUri?.startsWith('redis://'), 'cache has no connection URI');
+        await runningIn('caches', 'caches', name);
+        // a real command over the protocol, not just the reported state
+        const cli = engine.startsWith('valkey') ? 'valkey-cli' : 'redis-cli';
+        const out1 = await execIn(
+          `sm4rt-cache-${WS}-${name}`,
+          `${cli} -a ${shq(made.password)} --no-auth-warning SET smoke ok >/dev/null && ${cli} -a ${shq(made.password)} --no-auth-warning GET smoke`,
+        );
+        must(out1.includes('ok'), `${engine} SET/GET returned ${out1.trim().slice(0, 80)}`);
+        out.push(engine);
+      }
+      return `${out.join(', ')} answered SET/GET`;
+    }),
 
-  async database() {
-    const out = [];
-    for (const engine of ['postgres-16', 'mysql-8', 'mariadb-11']) {
-      const name = `sd-${engine.split('-')[0]}`;
-      const made = await create('databases', { name, engine, plan: 'micro' });
-      must(Boolean(made.connectionUri), 'database has no connection URI');
-      await runningIn('databases', 'databases', name);
-      const logs = await api('GET', `${BASE}/databases/${name}/logs`);
-      must(logs.status === 200 && String(logs.json?.logs ?? '').length > 0, 'database logs are empty');
-      await remove(`databases/${name}`);
-      out.push(engine);
-    }
-    return `${out.join(', ')} reached running with logs`;
-  },
+  database: () =>
+    withCleanup(async (own) => {
+      const out = [];
+      for (const engine of ['postgres-16', 'mysql-8', 'mariadb-11']) {
+        const name = named(`sd-${engine.split('-')[0]}`);
+        const made = await create('databases', { name, engine, plan: 'micro' });
+        own(`database ${name}`, removing(`databases/${name}`));
+        must(Boolean(made.connectionUri), 'database has no connection URI');
+        await runningIn('databases', 'databases', name);
+        const target = `sm4rt-db-${WS}-${name}`;
+        const query =
+          engine === 'postgres-16'
+            ? `PGPASSWORD=${shq(made.password)} psql -h 127.0.0.1 -U ${shq(made.user)} -d ${shq(made.database)} -tAc 'select 41+1'`
+            : `${engine === 'mysql-8' ? 'mysql' : 'mariadb'} -h 127.0.0.1 -u${shq(made.user)} -p${shq(made.password)} ${shq(made.database)} -Nse 'select 41+1'`;
+        const answer = await execIn(target, query);
+        must(answer.trim().endsWith('42'), `${engine} query returned ${answer.trim().slice(0, 80)}`);
+        const logs = await api('GET', `${BASE}/databases/${name}/logs`);
+        must(logs.status === 200 && String(logs.json?.logs ?? '').length > 0, 'database logs are empty');
+        out.push(engine);
+      }
+      return `${out.join(', ')} answered a query over the network port`;
+    }),
 
-  async server() {
-    const made = await create('vms', { name: 'smokevm', image: 'alpine-3', plan: 'nano' });
-    try {
+  server: () =>
+    withCleanup(async (own) => {
+      const made = await create('vms', { name: named('vm'), image: 'alpine-3', plan: 'nano' });
+      own(`server ${made.id}`, async () => {
+        const res = await api('POST', `${BASE}/vms/${made.id}/action`, { action: 'terminate' });
+        must(res.status === 202, `terminate server -> HTTP ${res.status} ${res.text.slice(0, 160)}`);
+      });
       await until('server running', async () => {
         const res = await api('GET', `${BASE}/vms`);
         const vm = (res.json?.vms ?? []).find((v) => v.id === made.id);
@@ -235,135 +312,145 @@ const FEATURES = {
       const host = EDGE ? new URL(EDGE).hostname : made.sshHost;
       await until(`SSH port ${made.sshPort} open`, () => tcpOpen(host, made.sshPort));
       return `alpine server running, SSH port ${made.sshPort} accepting connections`;
-    } finally {
-      await api('POST', `${BASE}/vms/${made.id}/action`, { action: 'terminate' });
-    }
-  },
+    }),
 
-  async gateway() {
-    await ensureWeb();
-    const made = await create('gateways', { name: 'smokegw', routes: [{ path: '/web', target: `task:${WEB}` }] });
-    await edgeOk('gateway route', made.url, '/web', { contains: 'It works' });
-    await remove('gateways/smokegw');
-    return 'route /web proxied to the container';
-  },
+  gateway: () =>
+    withCleanup(async (own) => {
+      const task = await webTask(own);
+      const name = named('gw');
+      const made = await create('gateways', { name, routes: [{ path: '/web', target: `task:${task.name}` }] });
+      own(`gateway ${name}`, removing(`gateways/${name}`));
+      await edgeOk('gateway route', made.url, '/web', { contains: 'It works' });
+      return 'route /web proxied to the container';
+    }),
 
-  async dns() {
-    await ensureWeb();
-    const made = await create('dns', { record: 'smokewww', type: 'ALIAS', target: WEB });
-    await edgeOk('DNS alias', `http://${made.fqdn}`, '/', { contains: 'It works' });
-    await remove('dns/smokewww');
-    return `${made.fqdn} served the container`;
-  },
+  dns: () =>
+    withCleanup(async (own) => {
+      const task = await webTask(own);
+      const record = named('www');
+      const made = await create('dns', { record, type: 'ALIAS', target: task.name });
+      own(`dns ${record}`, removing(`dns/${record}`));
+      await edgeOk('DNS alias', `http://${made.fqdn}`, '/', { contains: 'It works' });
+      return `${made.fqdn} served the container`;
+    }),
 
-  async cdn() {
-    await ensureWeb();
-    const task = await runningIn('tasks', 'tasks', WEB);
-    const origin = `http://sm4rt-task-${WS}-${task.name}:80`;
-    const made = await create('cdns', { name: 'smokecdn', origin });
-    await edgeOk('CDN', made.url, '/', { contains: 'It works', header: 'x-cache' });
-    const hit = await until('CDN cache hit', async () => {
-      const res = await edgeRequest(made.url, '/');
-      return String(res.headers['x-cache'] ?? '').includes('HIT') ? res : null;
-    });
-    must(hit.status === 200, 'CDN hit was not a 200');
-    const purge = await api('POST', `${BASE}/cdns/smokecdn/purge`);
-    must(purge.status === 202, `purge -> HTTP ${purge.status}`);
-    await remove('cdns/smokecdn');
-    return 'origin served, second request was a cache HIT, purge accepted';
-  },
-
-  async objectstore() {
-    await create('objectstore');
-    await until('object store running', async () => (await api('GET', `${BASE}/objectstore`)).json?.state === 'running');
-    await until('bucket created', async () => {
-      const res = await api('POST', `${BASE}/objectstore/buckets`, { name: 'smoke-bucket' });
-      return res.status === 201 || res.status === 409;
-    });
-    const list = await api('GET', `${BASE}/objectstore/buckets`);
-    must((list.json?.buckets ?? []).some((b) => b.name === 'smoke-bucket'), 'bucket missing from the list');
-    await remove('objectstore/buckets/smoke-bucket');
-    await remove('objectstore');
-    return 'S3 store running; bucket created, listed and deleted';
-  },
-
-  async tablestore() {
-    await create('tablestore');
-    await until('table store running', async () => (await api('GET', `${BASE}/tablestore`)).json?.state === 'running');
-    await until('table created', async () => {
-      const res = await api('POST', `${BASE}/tablestore/tables`, { name: 'smoke_table', hashKey: 'id' });
-      return res.status === 201 || res.status === 409;
-    });
-    const list = await api('GET', `${BASE}/tablestore/tables`);
-    must((list.json?.tables ?? []).some((t) => t.name === 'smoke_table'), 'table missing from the list');
-    await remove('tablestore/tables/smoke_table');
-    await remove('tablestore');
-    return 'DynamoDB-compatible store running; table created, listed and deleted';
-  },
-
-  async broker() {
-    const made = await create('broker');
-    await until('broker running', async () => (await api('GET', `${BASE}/broker`)).json?.state === 'running');
-    await until('queue created', async () => (await api('POST', `${BASE}/broker/queues`, { name: 'smoke-q' })).status === 201);
-    const list = await api('GET', `${BASE}/broker/queues`);
-    must((list.json?.queues ?? []).some((q) => q.name === 'smoke-q'), 'queue missing from the list');
-    await edgeOk('broker management UI', made.managementUrl, '/', { contains: 'RabbitMQ' });
-    await remove('broker/queues/smoke-q');
-    await remove('broker');
-    return 'RabbitMQ running; queue created and listed; management UI reachable';
-  },
-
-  async registry() {
-    const made = await create('registry');
-    await until('registry running', async () => (await api('GET', `${BASE}/registry`)).json?.state === 'running');
-    // /v2/ must demand credentials: 401 means the registry is up and protected
-    await edgeOk('registry API', made.url, '/v2/', { want: 401 });
-    const repos = await until('repo listing', async () => {
-      const res = await api('GET', `${BASE}/registry/repos`);
-      return res.status === 200 ? res : null;
-    });
-    must(Array.isArray(repos.json?.repos), 'repo list is not an array');
-    await remove('registry');
-    return 'registry running, /v2/ requires auth, repo listing works';
-  },
-
-  async function() {
-    const made = await create('functions', { name: 'smokefn' });
-    const res = await edgeOk('function', made.url, '/', { contains: 'hello' });
-    must(res.body.includes('hello'), `unexpected function output: ${res.body.slice(0, 120)}`);
-    await remove('functions/smokefn');
-    return `invoked over HTTP -> ${res.body.slice(0, 60)}`;
-  },
-
-  async observability() {
-    const made = await create('observability');
-    const health = await edgeOk('Grafana', made.grafanaUrl, '/api/health', { contains: 'database' });
-    must(health.body.includes('"database": "ok"'), 'Grafana health is not ok');
-    const otlp = await until('OTLP ingest', async () => {
-      const res = await edgeRequest(made.otlpUrl, '/v1/logs', {
-        method: 'POST',
-        body: '{"resourceLogs":[]}',
-        headers: { 'content-type': 'application/json' },
+  cdn: () =>
+    withCleanup(async (own) => {
+      const task = await webTask(own);
+      const name = named('cdn');
+      const made = await create('cdns', { name, origin: `http://sm4rt-task-${WS}-${task.name}:80` });
+      own(`cdn ${name}`, removing(`cdns/${name}`));
+      await edgeOk('CDN', made.url, '/', { contains: 'It works', header: 'x-cache' });
+      const hit = await until('CDN cache hit', async () => {
+        const res = await edgeRequest(made.url, '/');
+        return String(res.headers['x-cache'] ?? '').includes('HIT') ? res : null;
       });
-      return res.status === 200 ? res : null;
-    });
-    must(otlp.status === 200, 'OTLP endpoint did not accept logs');
-    await remove('observability');
-    return 'Grafana healthy; OTLP endpoint accepted a log export';
-  },
+      must(hit.status === 200, 'CDN hit was not a 200');
+      const purge = await api('POST', `${BASE}/cdns/${name}/purge`);
+      must(purge.status === 202, `purge -> HTTP ${purge.status}`);
+      return 'origin served, second request was a cache HIT, purge accepted';
+    }),
 
-  async devops() {
-    const made = await create('devops');
-    const git = await edgeOk('Gitea', made.gitUrl, '/api/v1/version', { contains: 'version' });
-    must(git.body.includes('version'), 'Gitea did not report a version');
-    await edgeOk('CI server', made.ciUrl, '/healthz', { want: 204 });
-    await until('DevOps bootstrapped', async () => {
-      const res = await api('GET', `${BASE}/devops`);
-      return res.json?.bootstrapped === true && res.json?.state === 'running';
-    });
-    await remove('devops');
-    return 'Gitea and the CI server answered; stack bootstrapped';
-  },
+  objectstore: () =>
+    withCleanup(async (own) => {
+      await enableAddon('objectstore', own);
+      await until('object store running', async () => (await api('GET', `${BASE}/objectstore`)).json?.state === 'running');
+      const bucket = named('smoke-bucket');
+      // a fresh name, so only a real create can make it appear in the list
+      await until('bucket created', async () => {
+        const res = await api('POST', `${BASE}/objectstore/buckets`, { name: bucket });
+        return res.status === 201;
+      });
+      own(`bucket ${bucket}`, removing(`objectstore/buckets/${bucket}`));
+      const list = await api('GET', `${BASE}/objectstore/buckets`);
+      must((list.json?.buckets ?? []).some((b) => b.name === bucket), 'bucket missing from the list');
+      return 'S3 store running; bucket created, listed and deleted';
+    }),
+
+  tablestore: () =>
+    withCleanup(async (own) => {
+      await enableAddon('tablestore', own);
+      await until('table store running', async () => (await api('GET', `${BASE}/tablestore`)).json?.state === 'running');
+      const table = `smoke_table_${RUN}`;
+      await until('table created', async () => {
+        const res = await api('POST', `${BASE}/tablestore/tables`, { name: table, hashKey: 'id' });
+        return res.status === 201;
+      });
+      own(`table ${table}`, removing(`tablestore/tables/${table}`));
+      const list = await api('GET', `${BASE}/tablestore/tables`);
+      must((list.json?.tables ?? []).some((t) => t.name === table), 'table missing from the list');
+      return 'DynamoDB-compatible store running; table created, listed and deleted';
+    }),
+
+  broker: () =>
+    withCleanup(async (own) => {
+      const made = await enableAddon('broker', own);
+      await until('broker running', async () => (await api('GET', `${BASE}/broker`)).json?.state === 'running');
+      const queue = named('smoke-q');
+      await until('queue created', async () => (await api('POST', `${BASE}/broker/queues`, { name: queue })).status === 201);
+      own(`queue ${queue}`, removing(`broker/queues/${queue}`));
+      const list = await api('GET', `${BASE}/broker/queues`);
+      must((list.json?.queues ?? []).some((q) => q.name === queue), 'queue missing from the list');
+      await edgeOk('broker management UI', made.managementUrl, '/', { contains: 'RabbitMQ' });
+      return 'RabbitMQ running; queue created and listed; management UI reachable';
+    }),
+
+  registry: () =>
+    withCleanup(async (own) => {
+      const made = await enableAddon('registry', own);
+      await until('registry running', async () => (await api('GET', `${BASE}/registry`)).json?.state === 'running');
+      // /v2/ must demand credentials: 401 means the registry is up and protected
+      await edgeOk('registry API', made.url, '/v2/', { want: 401 });
+      const repos = await until('repo listing', async () => {
+        const res = await api('GET', `${BASE}/registry/repos`);
+        return res.status === 200 ? res : null;
+      });
+      must(Array.isArray(repos.json?.repos), 'repo list is not an array');
+      return 'registry running, /v2/ requires auth, repo listing works';
+    }),
+
+  function: () =>
+    withCleanup(async (own) => {
+      const name = named('fn');
+      const made = await create('functions', { name });
+      own(`function ${name}`, removing(`functions/${name}`));
+      const res = await edgeOk('function', made.url, '/', { contains: 'hello' });
+      return `invoked over HTTP -> ${res.body.slice(0, 60)}`;
+    }),
+
+  observability: () =>
+    withCleanup(async (own) => {
+      const made = await enableAddon('observability', own);
+      const health = await edgeOk('Grafana', made.grafanaUrl, '/api/health', { contains: 'database' });
+      let db = null;
+      try {
+        db = JSON.parse(health.body).database;
+      } catch {
+        // not JSON
+      }
+      must(db === 'ok', `Grafana health reports database=${db}`);
+      await until('OTLP ingest', async () => {
+        const res = await edgeRequest(made.otlpUrl, '/v1/logs', {
+          method: 'POST',
+          body: '{"resourceLogs":[]}',
+          headers: { 'content-type': 'application/json' },
+        });
+        return res.status === 200;
+      });
+      return 'Grafana healthy; OTLP endpoint accepted a log export';
+    }),
+
+  devops: () =>
+    withCleanup(async (own) => {
+      const made = await enableAddon('devops', own);
+      await edgeOk('Gitea', made.gitUrl, '/api/v1/version', { contains: 'version' });
+      await edgeOk('CI server', made.ciUrl, '/healthz', { want: 204 });
+      await until('DevOps bootstrapped', async () => {
+        const res = await api('GET', `${BASE}/devops`);
+        return res.json?.bootstrapped === true && res.json?.state === 'running';
+      });
+      return 'Gitea and the CI server answered; stack bootstrapped';
+    }),
 };
 
 async function main() {
@@ -372,7 +459,17 @@ async function main() {
     console.error(`workspace "${WS}" not reachable: HTTP ${ws.status} ${ws.text.slice(0, 200)}`);
     process.exit(2);
   }
+  const unknown = [...(ONLY ?? []), ...SKIP].filter((k) => !(k in FEATURES));
+  if (unknown.length > 0) {
+    console.error(`unknown features: ${unknown.join(', ')} (known: ${Object.keys(FEATURES).join(', ')})`);
+    process.exit(2);
+  }
   const selected = Object.keys(FEATURES).filter((k) => (!ONLY || ONLY.includes(k)) && !SKIP.includes(k));
+  if (selected.length === 0) {
+    console.error('the selection matches no feature');
+    process.exit(2);
+  }
+  log(`run ${RUN}: testing ${selected.join(', ')}`);
   const results = [];
   for (const key of selected) {
     log(`▶ ${key}`);
@@ -385,9 +482,6 @@ async function main() {
       results.push({ key, ok: false, detail: err.message });
       log(`  ${key}: FAIL - ${err.message}`);
     }
-  }
-  if (webReady) {
-    await api('POST', `${BASE}/tasks/${WEB}/action`, { action: 'delete' });
   }
   console.log('\nfeature         result');
   for (const r of results) {

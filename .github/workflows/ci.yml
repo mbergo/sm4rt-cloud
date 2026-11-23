@@ -32,6 +32,7 @@ jobs:
           --module nodenext --target es2022 --moduleResolution nodenext --skipLibCheck
           src/server.ts src/k8s.ts src/resources.ts src/services.ts
           tests/names.test.ts tests/resources.test.ts tests/e2e-kind.test.ts tests/json-body.test.ts tests/domains.test.ts
+          tests/services.test.ts
         working-directory: api
       - name: unit tests (names)
         run: node --test tests/names.test.ts

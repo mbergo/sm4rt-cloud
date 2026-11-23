@@ -165,15 +165,23 @@ test('cassandra browser sidecar is pointed at the broker with the variable it re
   // cassandra-web only honours CASSANDRA_HOST; any other name leaves it on its
   // built-in default host "cassandra" and the sidecar crash-loops.
   const ui = SERVICE_CATALOG.cassandra.sidecars?.find((s) => s.name === 'ui');
-  const names = (ui?.env ?? []).map((e) => e.name);
-  assert.ok(names.includes('CASSANDRA_HOST'));
-  assert.ok(!names.includes('CASSANDRA_HOST_IPS'));
+  const env = Object.fromEntries((ui?.env ?? []).map((e) => [e.name, e.value]));
+  // 127.0.0.1 is rewritten to the main service's alias on swarm and is the
+  // shared pod address on kubernetes
+  assert.equal(env.CASSANDRA_HOST, '127.0.0.1');
+  assert.equal(env.CASSANDRA_HOST_IPS, undefined);
 });
 
 test('atlas restarts itself when the server stops serving', () => {
-  const script = (SERVICE_CATALOG.atlas.command ?? []).join(' ');
+  const script = (SERVICE_CATALOG.atlas.command ?? []).join('\n');
   assert.match(script, /atlas_start\.py/);
-  assert.match(script, /exit 1/);
+  // probes the REST API with a single attempt per check
+  assert.match(script, /wget -q -t 1 -T 10 .*localhost:21000\/api\/atlas\/admin\/version/);
+  // gives up only after 600s of wall-clock time without an answer, and a
+  // successful probe pushes that deadline out again
+  assert.match(script, /deadline=\$\(\(SECONDS \+ 600\)\)/);
+  assert.match(script, /then deadline=\$\(\(SECONDS \+ 600\)\); fi/);
+  assert.match(script, /if \[ "\$SECONDS" -ge "\$deadline" \]; then .*exit 1; fi/);
 });
 
 test('sidecarOwner maps sidecar labels back to their catalog service', () => {
