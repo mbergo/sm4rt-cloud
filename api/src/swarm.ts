@@ -300,6 +300,24 @@ export class SwarmDriver implements CloudDriver {
     this.networkReady = true;
   }
 
+  /**
+   * Every swarm service that belongs to a workspace: catalog services carry
+   * our managed-by + instance labels, compute.ts resources (databases,
+   * caches, tasks, ...) only carry `sm4rt.workspace`. Docker ANDs label
+   * filters, so the two kinds take two queries.
+   */
+  private async listWorkspaceServices(name: string): Promise<Array<Record<string, any>>> {
+    const [catalog, compute] = await Promise.all([
+      this.listManagedServices({ label: [`${MANAGED_LABEL}=${MANAGED_BY}`, `${INSTANCE_LABEL}=${name}`] }),
+      this.docker.listServices({ filters: JSON.stringify({ label: [`${WS_OWNER_LABEL}=${name}`] }) }),
+    ]);
+    const byId = new Map<string, Record<string, any>>();
+    for (const svc of [...catalog, ...compute] as Array<Record<string, any>>) {
+      byId.set(String(svc.ID), svc);
+    }
+    return [...byId.values()];
+  }
+
   private async listManagedServices(filters: Record<string, string[]>) {
     return this.docker.listServices({
       filters: JSON.stringify({ label: [`${MANAGED_LABEL}=${MANAGED_BY}`], ...filters }),
@@ -641,7 +659,14 @@ export class SwarmDriver implements CloudDriver {
     const recent = tasks
       .sort((a, b) => String(b.CreatedAt ?? '').localeCompare(String(a.CreatedAt ?? '')))
       .slice(0, 5);
-    if (recent.some((t) => String(t.Status?.State ?? '') === 'running')) {
+    // only a task swarm still wants running counts: a retiring task can read
+    // "running" while its replacement crash-loops
+    if (
+      recent.some(
+        (t) =>
+          String(t.Status?.State ?? '') === 'running' && String(t.DesiredState ?? '') === 'running',
+      )
+    ) {
       return null;
     }
     const failed = recent.filter((t) =>
@@ -955,11 +980,9 @@ export class SwarmDriver implements CloudDriver {
     name: string,
     target: string,
   ): Promise<{ id: string; specName: string; svc: Record<string, any> }> {
-    const services = await this.listManagedServices({});
-    const owned = (services as Array<Record<string, any>>).filter((svc) => {
-      const labels: Record<string, string> = svc.Spec?.Labels ?? {};
-      return labels[INSTANCE_LABEL] === name || labels[WS_OWNER_LABEL] === name;
-    });
+    // listManagedServices alone never returns compute resources, which carry
+    // only the workspace label, so exec/config could not reach them
+    const owned = await this.listWorkspaceServices(name);
     const found =
       owned.find((svc) => String(svc.Spec?.Name) === target) ??
       // catalog id shorthand → default instance
@@ -1248,7 +1271,7 @@ export class SwarmDriver implements CloudDriver {
   }
 
   async listServiceTargets(name: string): Promise<ServiceTargetInfo[]> {
-    const services = await this.listManagedServices({});
+    const services = await this.listWorkspaceServices(name);
     const targets: ServiceTargetInfo[] = [];
     for (const svc of services as Array<Record<string, any>>) {
       const labels: Record<string, string> = svc.Spec?.Labels ?? {};
