@@ -8,7 +8,7 @@ import {
   SERVICE_CATEGORIES,
   isRealServiceId,
 } from '../src/services.ts';
-import { createLogDemuxer, agentTaskAddress } from '../src/swarm.ts';
+import { createLogDemuxer, agentTaskAddress, sidecarOwner } from '../src/swarm.ts';
 
 test('catalog covers every REAL_SERVICES id with a consistent spec', () => {
   for (const id of REAL_SERVICES) {
@@ -159,4 +159,27 @@ test('agentTaskAddress picks the running agent task on the right node and strips
     ),
     null,
   );
+});
+
+test('cassandra browser sidecar is pointed at the broker with the variable it reads', () => {
+  // cassandra-web only honours CASSANDRA_HOST; any other name leaves it on its
+  // built-in default host "cassandra" and the sidecar crash-loops.
+  const ui = SERVICE_CATALOG.cassandra.sidecars?.find((s) => s.name === 'ui');
+  const names = (ui?.env ?? []).map((e) => e.name);
+  assert.ok(names.includes('CASSANDRA_HOST'));
+  assert.ok(!names.includes('CASSANDRA_HOST_IPS'));
+});
+
+test('atlas restarts itself when the server stops serving', () => {
+  const script = (SERVICE_CATALOG.atlas.command ?? []).join(' ');
+  assert.match(script, /atlas_start\.py/);
+  assert.match(script, /exit 1/);
+});
+
+test('sidecarOwner maps sidecar labels back to their catalog service', () => {
+  assert.equal(sidecarOwner('kafka-ui'), 'kafka');
+  assert.equal(sidecarOwner('flink-taskmanager'), 'flink');
+  assert.equal(sidecarOwner('spark-worker'), 'spark');
+  assert.equal(sidecarOwner('kafka'), null);
+  assert.equal(sidecarOwner('kafka-nope'), null);
 });

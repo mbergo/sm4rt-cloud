@@ -219,7 +219,9 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
         name: 'ui',
         image: 'ipushc/cassandra-web:v1.1.6',
         env: [
-          { name: 'CASSANDRA_HOST_IPS', value: '127.0.0.1' },
+          // cassandra-web reads CASSANDRA_HOST (see its config.yaml); with any
+          // other name it falls back to the literal host "cassandra" and exits.
+          { name: 'CASSANDRA_HOST', value: '127.0.0.1' },
           { name: 'CASSANDRA_PORT', value: '9042' },
           { name: 'HOST_PORT', value: ':3000' },
         ],
@@ -805,6 +807,26 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
       'Apache Atlas 2.3 metadata catalog & governance (lineage, classification). Embedded HBase + Solr — first start takes 5-8 min.',
     image: 'sburn/apache-atlas:2.3.0',
     category: 'pipelines',
+    // The image's own command is `atlas_start.py; tail -f application.log`, so
+    // the container outlives a dead Atlas: when the embedded ZooKeeper session
+    // expires during a slow start (seen on a busy node) the server stays up
+    // answering 503 forever and nothing restarts it. Keep the same start-up,
+    // then watch the REST API and exit once it has not served for 10 minutes -
+    // the restart policy brings up a fresh container on the same data volume.
+    command: [
+      '/bin/bash',
+      '-c',
+      [
+        '/apache-atlas/bin/atlas_start.py',
+        'tail -fF /apache-atlas/logs/application.log &',
+        'fails=0',
+        'while true; do',
+        '  sleep 30',
+        '  if wget -q -T 10 -O /dev/null --auth-no-challenge --user=admin --password=admin http://localhost:21000/api/atlas/admin/version; then fails=0; else fails=$((fails+1)); fi',
+        '  if [ "$fails" -ge 20 ]; then echo "atlas has not served for 10 minutes - exiting so it is restarted"; exit 1; fi',
+        'done',
+      ].join('\n'),
+    ],
     ports: [{ name: 'http', port: 21000 }],
     probePort: 21000,
     startupSeconds: 600,
