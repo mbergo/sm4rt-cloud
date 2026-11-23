@@ -151,7 +151,7 @@ async function until(what, fn) {
 }
 
 // Short random suffix so two runs against one workspace never share a name.
-const RUN = Math.random().toString(36).slice(2, 6);
+const RUN = Math.random().toString(36).slice(2, 10);
 const named = (base) => `${base}-${RUN}`;
 
 async function create(path, body) {
@@ -161,20 +161,19 @@ async function create(path, body) {
 }
 
 /**
- * One attempt at creating a per-run named item, safe to retry: a 409 for
- * this run's unique name means an earlier attempt landed and only its reply
- * was lost, so it counts once the listing shows the item.
+ * One attempt at creating a per-run named item, safe to retry. If an earlier
+ * attempt landed but its reply was lost, the retry fails (409 on most stores,
+ * 502 from the table store), so any non-201 reply consults the listing: the
+ * item counts as created when it is listed under this run's name and passes
+ * `matches`.
  */
-async function createdOnce(path, body, listKey) {
+async function createdOnce(path, body, listKey, matches = () => true) {
   const res = await api('POST', `${BASE}/${path}`, body);
   if (res.status === 201) {
     return true;
   }
-  if (res.status !== 409) {
-    return false;
-  }
   const list = await api('GET', `${BASE}/${path}`);
-  return (list.json?.[listKey] ?? []).some((x) => x.name === body.name);
+  return (list.json?.[listKey] ?? []).some((x) => x.name === body.name && matches(x));
 }
 
 /**
@@ -408,7 +407,10 @@ const FEATURES = {
       await until('table store running', async () => (await api('GET', `${BASE}/tablestore`)).json?.state === 'running');
       const table = `smoke_table_${RUN}`;
       own(`table ${table}`, removing(`tablestore/tables/${table}`, [204, 404]));
-      await until('table created', () => createdOnce('tablestore/tables', { name: table, hashKey: 'id' }, 'tables'));
+      await until('table created', () => createdOnce('tablestore/tables', { name: table, hashKey: 'id' }, 'tables', (t) =>
+          // the same name alone is not proof it is ours: require the schema we asked for
+          (t.keySchema ?? []).some((k) => k.attribute === 'id' && k.type === 'S' && k.role === 'HASH'),
+        ));
       const list = await api('GET', `${BASE}/tablestore/tables`);
       must((list.json?.tables ?? []).some((t) => t.name === table), 'table missing from the list');
       return 'DynamoDB-compatible store running; table created, listed and deleted';
