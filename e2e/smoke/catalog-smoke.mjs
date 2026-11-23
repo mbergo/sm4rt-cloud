@@ -53,7 +53,8 @@ const ONLY = args.only !== undefined ? args.only.split(',').filter(Boolean) : nu
 const SKIP = args.skip !== undefined ? args.skip.split(',').filter(Boolean) : [];
 const KEEP = args.keep === 'true';
 const EXTRA_WAIT = Number(args['pull-seconds'] ?? 900);
-if (!Number.isFinite(EXTRA_WAIT) || EXTRA_WAIT < 0) {
+// Number('') is 0, so an empty or blank value must be rejected explicitly
+if (args['pull-seconds']?.trim() === '' || !Number.isFinite(EXTRA_WAIT) || EXTRA_WAIT < 0) {
   console.error(`--pull-seconds needs a finite number of seconds >= 0, got "${args['pull-seconds']}"`);
   process.exit(2);
 }
