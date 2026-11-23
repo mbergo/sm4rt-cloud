@@ -41,6 +41,10 @@ const EDGE = args.edge ? args.edge.replace(/\/$/, '') : null;
 const ONLY = args.only !== undefined ? args.only.split(',').filter(Boolean) : null;
 const SKIP = args.skip !== undefined ? args.skip.split(',').filter(Boolean) : [];
 const WAIT = Number(args['wait-seconds'] ?? 600) * 1000;
+if (!Number.isFinite(WAIT) || WAIT <= 0) {
+  console.error(`--wait-seconds needs a finite number of seconds > 0, got "${args['wait-seconds']}"`);
+  process.exit(2);
+}
 const BASE = `/api/instances/${WS}/compute`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,6 +91,9 @@ function edgeRequest(publicUrl, path = '/', opts = {}) {
       },
       (res) => {
         const chunks = [];
+        // a connection cut after the headers errors on the response, not the
+        // request: report it as a failed probe instead of crashing the run
+        res.on('error', (err) => resolve({ status: 0, headers: {}, body: '', error: err.message }));
         res.on('data', (c) => chunks.push(c));
         res.on('end', () =>
           resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }),
@@ -151,6 +158,23 @@ async function create(path, body) {
   const res = await api('POST', `${BASE}/${path}`, body ?? {});
   must(res.status === 201, `POST ${path} -> HTTP ${res.status} ${res.text.slice(0, 200)}`);
   return res.json;
+}
+
+/**
+ * One attempt at creating a per-run named item, safe to retry: a 409 for
+ * this run's unique name means an earlier attempt landed and only its reply
+ * was lost, so it counts once the listing shows the item.
+ */
+async function createdOnce(path, body, listKey) {
+  const res = await api('POST', `${BASE}/${path}`, body);
+  if (res.status === 201) {
+    return true;
+  }
+  if (res.status !== 409) {
+    return false;
+  }
+  const list = await api('GET', `${BASE}/${path}`);
+  return (list.json?.[listKey] ?? []).some((x) => x.name === body.name);
 }
 
 /**
@@ -372,10 +396,7 @@ const FEATURES = {
       // Owned before the first POST: a retried create can land server-side
       // even when its reply is lost. 404 means nothing was created.
       own(`bucket ${bucket}`, removing(`objectstore/buckets/${bucket}`, [204, 404]));
-      await until('bucket created', async () => {
-        const res = await api('POST', `${BASE}/objectstore/buckets`, { name: bucket });
-        return res.status === 201;
-      });
+      await until('bucket created', () => createdOnce('objectstore/buckets', { name: bucket }, 'buckets'));
       const list = await api('GET', `${BASE}/objectstore/buckets`);
       must((list.json?.buckets ?? []).some((b) => b.name === bucket), 'bucket missing from the list');
       return 'S3 store running; bucket created, listed and deleted';
@@ -387,10 +408,7 @@ const FEATURES = {
       await until('table store running', async () => (await api('GET', `${BASE}/tablestore`)).json?.state === 'running');
       const table = `smoke_table_${RUN}`;
       own(`table ${table}`, removing(`tablestore/tables/${table}`, [204, 404]));
-      await until('table created', async () => {
-        const res = await api('POST', `${BASE}/tablestore/tables`, { name: table, hashKey: 'id' });
-        return res.status === 201;
-      });
+      await until('table created', () => createdOnce('tablestore/tables', { name: table, hashKey: 'id' }, 'tables'));
       const list = await api('GET', `${BASE}/tablestore/tables`);
       must((list.json?.tables ?? []).some((t) => t.name === table), 'table missing from the list');
       return 'DynamoDB-compatible store running; table created, listed and deleted';
@@ -402,7 +420,7 @@ const FEATURES = {
       await until('broker running', async () => (await api('GET', `${BASE}/broker`)).json?.state === 'running');
       const queue = named('smoke-q');
       own(`queue ${queue}`, removing(`broker/queues/${queue}`, [204, 404]));
-      await until('queue created', async () => (await api('POST', `${BASE}/broker/queues`, { name: queue })).status === 201);
+      await until('queue created', () => createdOnce('broker/queues', { name: queue }, 'queues'));
       const list = await api('GET', `${BASE}/broker/queues`);
       must((list.json?.queues ?? []).some((q) => q.name === queue), 'queue missing from the list');
       await edgeOk('broker management UI', made.managementUrl, '/', { contains: 'RabbitMQ' });

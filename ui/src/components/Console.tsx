@@ -797,7 +797,15 @@ function InlineLogTerminal({ instance }: { instance: string }) {
           }
           append(pieces);
         };
-        es.onerror = () => setStatus('error');
+        es.onerror = () => {
+          // keep a diagnostic that arrived without a trailing newline; the
+          // EventSource reconnects on its own
+          if (partial) {
+            append([partial]);
+            partial = '';
+          }
+          setStatus('error');
+        };
       })
       .catch(() => setStatus('error'));
     return () => {

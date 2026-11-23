@@ -53,6 +53,10 @@ const ONLY = args.only !== undefined ? args.only.split(',').filter(Boolean) : nu
 const SKIP = args.skip !== undefined ? args.skip.split(',').filter(Boolean) : [];
 const KEEP = args.keep === 'true';
 const EXTRA_WAIT = Number(args['pull-seconds'] ?? 900);
+if (!Number.isFinite(EXTRA_WAIT) || EXTRA_WAIT < 0) {
+  console.error(`--pull-seconds needs a finite number of seconds >= 0, got "${args['pull-seconds']}"`);
+  process.exit(2);
+}
 const REPORT = args.report ?? null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -103,6 +107,9 @@ function edgeRequest(publicUrl, path, opts = {}) {
       },
       (res) => {
         const chunks = [];
+        // a connection cut after the headers errors on the response, not the
+        // request: report it as a failed probe instead of crashing the run
+        res.on('error', (err) => resolve({ status: 0, headers: {}, body: '', error: err.message }));
         res.on('data', (c) => chunks.push(c));
         res.on('end', () =>
           resolve({
@@ -337,7 +344,11 @@ async function stopService(id) {
     const list = await api('GET', `/api/instances/${WS}/services`).catch(() => null);
     gone = list?.json?.services?.find((s) => s.id === id)?.status === 'stopped';
   }
-  return stop.status < 300 && gone ? pass('stopped') : fail(`stop -> HTTP ${stop.status}, still listed`);
+  const okStatus = stop.status >= 200 && stop.status < 300;
+  if (okStatus && gone) {
+    return pass('stopped');
+  }
+  return fail(`stop -> HTTP ${stop.status}${stop.status === 0 ? ' (no response)' : ''}, ${gone ? 'listed as stopped' : 'still listed'}`);
 }
 
 async function checkService(svc, result, started, check) {
