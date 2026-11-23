@@ -200,7 +200,13 @@ jobs:
       - name: preload emulator image into kind
         run: |
           docker pull floci/floci:latest
-          kind load docker-image floci/floci:latest --name floci-ci
+          # floci/floci is published multi-platform. Docker's containerd image
+          # store exports the whole index, including platforms it never
+          # pulled, and kind's import then fails on the missing blobs
+          # ("content digest ... not found"). Export only the runner's own
+          # platform and load that archive instead.
+          docker save --platform linux/amd64 floci/floci:latest -o /tmp/floci.tar
+          kind load image-archive /tmp/floci.tar --name floci-ci
       - name: install api deps
         run: npm ci
         working-directory: api
