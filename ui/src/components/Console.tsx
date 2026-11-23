@@ -729,7 +729,7 @@ function InlineLogTerminal({ instance }: { instance: string }) {
   const [targets, setTargets] = useState<ServiceTargetInfo[]>([]);
   const [target, setTarget] = useState<string>('');
   const [lines, setLines] = useState<string[]>([]);
-  const [status, setStatus] = useState<'connecting' | 'live' | 'error'>('connecting');
+  const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting');
   const preRef = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
@@ -759,25 +759,37 @@ function InlineLogTerminal({ instance }: { instance: string }) {
           return;
         }
         source = es;
-        es.onmessage = (ev) => {
-          setStatus('live');
-          // The stream sends JSON events ({ chunk } / { done }), the same ones
-          // LogDock reads. Printing ev.data as-is showed the raw JSON envelope
-          // instead of the log lines.
-          let next: string[];
-          try {
-            const payload = JSON.parse(ev.data as string) as { chunk?: string; done?: boolean };
-            if (payload.done) {
-              es.close();
-              return;
-            }
-            next = (payload.chunk ?? '').split('\n').filter((l) => l.length > 0);
-          } catch {
-            next = [ev.data as string];
-          }
+        // A chunk is whatever one stream read returned, not a whole number of
+        // lines, so keep the unfinished tail until its newline arrives.
+        let partial = '';
+        const append = (next: string[]) => {
           if (next.length > 0) {
             setLines((prev) => [...prev, ...next].slice(-500));
           }
+        };
+        es.onmessage = (ev) => {
+          // The stream sends JSON events ({ chunk } / { done }), the same ones
+          // LogDock reads. Printing ev.data as-is showed the raw JSON envelope
+          // instead of the log lines.
+          let payload: { chunk?: string; done?: boolean };
+          try {
+            payload = JSON.parse(ev.data as string) as { chunk?: string; done?: boolean };
+          } catch {
+            setStatus('live');
+            append([ev.data as string]);
+            return;
+          }
+          if (payload.done) {
+            append(partial ? [partial] : []);
+            partial = '';
+            setStatus('ended');
+            es.close();
+            return;
+          }
+          setStatus('live');
+          const pieces = (partial + (payload.chunk ?? '')).split('\n');
+          partial = pieces.pop() ?? '';
+          append(pieces);
         };
         es.onerror = () => setStatus('error');
       })
@@ -806,7 +818,9 @@ function InlineLogTerminal({ instance }: { instance: string }) {
                 ? 'bg-emerald-400'
                 : status === 'connecting'
                   ? 'bg-amber-400 animate-pulse'
-                  : 'bg-rose-400'
+                  : status === 'ended'
+                    ? 'bg-stone-500'
+                    : 'bg-rose-400'
             }`}
           />
         </h3>

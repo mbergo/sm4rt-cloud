@@ -811,19 +811,21 @@ export const SERVICE_CATALOG: Record<RealServiceId, RealServiceSpec> = {
     // the container outlives a dead Atlas: when the embedded ZooKeeper session
     // expires during a slow start (seen on a busy node) the server stays up
     // answering 503 forever and nothing restarts it. Keep the same start-up,
-    // then watch the REST API and exit once it has not served for 10 minutes -
-    // the restart policy brings up a fresh container on the same data volume.
+    // then watch the REST API and exit once it has not answered for 10 minutes
+    // of wall-clock time - the restart policy brings up a fresh container.
+    // Each probe is a single attempt (-t 1) so a hung server cannot stretch
+    // the window through wget's own retries.
     command: [
       '/bin/bash',
       '-c',
       [
         '/apache-atlas/bin/atlas_start.py',
         'tail -fF /apache-atlas/logs/application.log &',
-        'fails=0',
+        'deadline=$((SECONDS + 600))',
         'while true; do',
         '  sleep 30',
-        '  if wget -q -T 10 -O /dev/null --auth-no-challenge --user=admin --password=admin http://localhost:21000/api/atlas/admin/version; then fails=0; else fails=$((fails+1)); fi',
-        '  if [ "$fails" -ge 20 ]; then echo "atlas has not served for 10 minutes - exiting so it is restarted"; exit 1; fi',
+        '  if wget -q -t 1 -T 10 -O /dev/null --auth-no-challenge --user=admin --password=admin http://localhost:21000/api/atlas/admin/version; then deadline=$((SECONDS + 600)); fi',
+        '  if [ "$SECONDS" -ge "$deadline" ]; then echo "atlas has not served for 10 minutes - exiting so it is restarted"; exit 1; fi',
         'done',
       ].join('\n'),
     ],
