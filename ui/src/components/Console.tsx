@@ -761,7 +761,23 @@ function InlineLogTerminal({ instance }: { instance: string }) {
         source = es;
         es.onmessage = (ev) => {
           setStatus('live');
-          setLines((prev) => [...prev.slice(-499), ev.data as string]);
+          // The stream sends JSON events ({ chunk } / { done }), the same ones
+          // LogDock reads. Printing ev.data as-is showed the raw JSON envelope
+          // instead of the log lines.
+          let next: string[];
+          try {
+            const payload = JSON.parse(ev.data as string) as { chunk?: string; done?: boolean };
+            if (payload.done) {
+              es.close();
+              return;
+            }
+            next = (payload.chunk ?? '').split('\n').filter((l) => l.length > 0);
+          } catch {
+            next = [ev.data as string];
+          }
+          if (next.length > 0) {
+            setLines((prev) => [...prev, ...next].slice(-500));
+          }
         };
         es.onerror = () => setStatus('error');
       })
