@@ -26,12 +26,19 @@ import http from 'node:http';
 import https from 'node:https';
 import { writeFileSync } from 'node:fs';
 
+// Accepts both `--key value` and `--key=value`.
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => {
-    if (a.startsWith('--')) {
-      const next = all[i + 1];
-      acc.push([a.slice(2), next && !next.startsWith('--') ? next : 'true']);
+    if (!a.startsWith('--')) {
+      return acc;
     }
+    const eq = a.indexOf('=');
+    if (eq > 2) {
+      acc.push([a.slice(2, eq), a.slice(eq + 1)]);
+      return acc;
+    }
+    const next = all[i + 1];
+    acc.push([a.slice(2), next && !next.startsWith('--') ? next : 'true']);
     return acc;
   }, []),
 );
