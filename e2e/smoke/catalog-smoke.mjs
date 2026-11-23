@@ -309,14 +309,16 @@ async function testService(svc) {
     return result;
   }
 
-  // 1. deploy
-  const start = await api('POST', `/api/instances/${WS}/services/${id}/start`);
-  if (start.status >= 300) {
-    result.deploy = fail(`start -> HTTP ${start.status} ${start.text.slice(0, 200)}`);
-    return result;
-  }
-  // From here on this run owns the service: stop it however the checks end.
+  // From here on this run owns the service: stop it however the run ends,
+  // including a start that fails half way (main service created, a sidecar
+  // not) or throws.
   try {
+    // 1. deploy
+    const start = await api('POST', `/api/instances/${WS}/services/${id}/start`);
+    if (start.status >= 300) {
+      result.deploy = fail(`start -> HTTP ${start.status} ${start.text.slice(0, 200)}`);
+      return result;
+    }
     await checkService(svc, result, started, check);
   } finally {
     result.stop = KEEP ? pass('kept (--keep)') : await stopService(id);

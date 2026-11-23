@@ -195,8 +195,11 @@ const removing = (path, ok = [204]) => async () => {
 async function enableAddon(path, own) {
   const before = await api('GET', `${BASE}/${path}`);
   must(before.status === 200, `GET ${path} -> HTTP ${before.status}`);
+  // Most add-ons answer with their status object; observability wraps it as
+  // { observability: <status|null> }.
+  const status = before.json && 'observability' in before.json ? before.json.observability : before.json;
   must(
-    !before.json?.enabled && !['running', 'starting'].includes(before.json?.state),
+    !status?.enabled && !['running', 'starting'].includes(status?.state),
     `${path} is already enabled in workspace "${WS}" - disable it or use another workspace`,
   );
   const made = await create(path);
@@ -366,11 +369,13 @@ const FEATURES = {
       await until('object store running', async () => (await api('GET', `${BASE}/objectstore`)).json?.state === 'running');
       const bucket = named('smoke-bucket');
       // a fresh name, so only a real create can make it appear in the list
+      // Owned before the first POST: a retried create can land server-side
+      // even when its reply is lost. 404 means nothing was created.
+      own(`bucket ${bucket}`, removing(`objectstore/buckets/${bucket}`, [204, 404]));
       await until('bucket created', async () => {
         const res = await api('POST', `${BASE}/objectstore/buckets`, { name: bucket });
         return res.status === 201;
       });
-      own(`bucket ${bucket}`, removing(`objectstore/buckets/${bucket}`));
       const list = await api('GET', `${BASE}/objectstore/buckets`);
       must((list.json?.buckets ?? []).some((b) => b.name === bucket), 'bucket missing from the list');
       return 'S3 store running; bucket created, listed and deleted';
@@ -381,11 +386,11 @@ const FEATURES = {
       await enableAddon('tablestore', own);
       await until('table store running', async () => (await api('GET', `${BASE}/tablestore`)).json?.state === 'running');
       const table = `smoke_table_${RUN}`;
+      own(`table ${table}`, removing(`tablestore/tables/${table}`, [204, 404]));
       await until('table created', async () => {
         const res = await api('POST', `${BASE}/tablestore/tables`, { name: table, hashKey: 'id' });
         return res.status === 201;
       });
-      own(`table ${table}`, removing(`tablestore/tables/${table}`));
       const list = await api('GET', `${BASE}/tablestore/tables`);
       must((list.json?.tables ?? []).some((t) => t.name === table), 'table missing from the list');
       return 'DynamoDB-compatible store running; table created, listed and deleted';
@@ -396,8 +401,8 @@ const FEATURES = {
       const made = await enableAddon('broker', own);
       await until('broker running', async () => (await api('GET', `${BASE}/broker`)).json?.state === 'running');
       const queue = named('smoke-q');
+      own(`queue ${queue}`, removing(`broker/queues/${queue}`, [204, 404]));
       await until('queue created', async () => (await api('POST', `${BASE}/broker/queues`, { name: queue })).status === 201);
-      own(`queue ${queue}`, removing(`broker/queues/${queue}`));
       const list = await api('GET', `${BASE}/broker/queues`);
       must((list.json?.queues ?? []).some((q) => q.name === queue), 'queue missing from the list');
       await edgeOk('broker management UI', made.managementUrl, '/', { contains: 'RabbitMQ' });

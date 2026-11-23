@@ -789,6 +789,12 @@ function InlineLogTerminal({ instance }: { instance: string }) {
           setStatus('live');
           const pieces = (partial + (payload.chunk ?? '')).split('\n');
           partial = pieces.pop() ?? '';
+          // Output that never ends a line (progress bars, binary noise) must
+          // not grow the buffer without bound: show what we have as a line.
+          if (partial.length > 4096) {
+            pieces.push(partial);
+            partial = '';
+          }
           append(pieces);
         };
         es.onerror = () => setStatus('error');
